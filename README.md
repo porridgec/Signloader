@@ -13,7 +13,7 @@
 
 ### 签名身份（重要）
 
-`build.sh` 会自动用本机可用的签名证书（`security find-identity -v -p codesigning` 的第一个）给 app 签名，也可用环境变量指定：
+`build.sh` 会自动用本机可用的签名证书（`security find-identity -v -p codesigning` 的第一个）给 app 和 SwiftPM 产物签名，也可用环境变量指定：
 
 ```bash
 SIGN_IDENTITY="Apple Development: you@example.com (TEAMID)" ./build.sh install
@@ -21,7 +21,7 @@ SIGN_IDENTITY="Apple Development: you@example.com (TEAMID)" ./build.sh install
 
 没有证书时回退到 ad-hoc。区别不只是 Gatekeeper：
 
-- **证书签名** → app 的指定要求（Designated Requirement）锚定在证书上，**每次重建都相同**，Keychain 里存的密码可以无感读取。
+- **证书签名** → app 的指定要求（Designated Requirement）锚定在证书上，**每次重建都相同**，Keychain 里存的密码可以无感读取。注意 DR 还包含 identifier：SwiftPM 直接产出的二进制默认是 `Name-<hash>`，和 `.app` 的 bundle id 不一致，所以 `build.sh` 对它显式传 `--identifier`，保证两边 DR 完全相同——否则直接跑 `.build/debug/Signloader` 仍会触发授权框。
 - **ad-hoc 签名** → DR 就是当次二进制的 cdhash，每次构建都变；Keychain 条目的 ACL 永远对不上，**每次重建后首次读取都会弹授权框**。这种构建请用 `SIGNLOADER_P12_PASSWORD` 环境变量。
 
 ## 签名工具包（signing kit）

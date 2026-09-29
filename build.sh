@@ -58,7 +58,11 @@ sign_app() {
 
   if [ -n "$identity" ]; then
     echo "==> codesign: ${identity}"
-    if codesign --force --sign "$identity" --timestamp=none "$dir" >/dev/null 2>&1; then
+    # --identifier keeps the designated requirement identical to the .app's
+    # (SwiftPM binaries otherwise get a synthetic "Name-<hash>" identifier, and
+    # a Keychain ACL match compares the whole DR, identifier included).
+    if codesign --force --sign "$identity" --timestamp=none \
+                 --identifier "${BUNDLE_ID}" "$dir" >/dev/null 2>&1; then
       return 0
     fi
     echo "   signing failed, falling back to ad-hoc"
@@ -79,6 +83,12 @@ build() {
   local bin
   bin="$(swift build -c "$config" --show-bin-path)/${APP_NAME}"
   [ -x "$bin" ] || { echo "executable not found at $bin"; exit 1; }
+
+  # Sign the SwiftPM output too, not just the assembled .app: an unsigned or
+  # ad-hoc binary reading the Keychain triggers an authorization prompt every
+  # time its cdhash changes, and `.build/*/Signloader` gets run directly often
+  # enough (testing, scripting) for that to matter.
+  sign_app "$bin"
 
   make_icon
 
