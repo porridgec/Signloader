@@ -83,7 +83,7 @@ struct ProfileDetailView: View {
             }
             Badge(
                 text: profile.expiryLabel,
-                color: profile.isExpired ? Palette.danger
+                color: profile.isExpired || profile.daysRemaining < 7 ? Palette.danger
                     : (profile.daysRemaining < 30 ? Palette.warning : Palette.success)
             )
         }
@@ -126,21 +126,38 @@ struct ProfileDetailView: View {
         }
     }
 
-    /// Created → now → expiration, so it is obvious how much life is left.
+    /// Remaining lifetime, drawn as the coloured part reading left-to-right; the
+    /// grey track is what has already elapsed. Colour is a traffic light:
+    /// green while comfortable, amber inside a month, red inside a week or once
+    /// expired (then the track itself goes red, since there is no bar left).
     private var lifespanBar: some View {
         let total = max(profile.expiration.timeIntervalSince(profile.creation), 1)
         let elapsed = min(max(Date().timeIntervalSince(profile.creation), 0), total)
+        let remaining = max(total - elapsed, 0)
         return GeometryReader { proxy in
             ZStack(alignment: .leading) {
-                Capsule().fill(Color.primary.opacity(0.1))
+                Capsule().fill(profile.isExpired
+                    ? Palette.danger.opacity(0.35)
+                    : Color.primary.opacity(0.12))
                 Capsule()
-                    .fill(profile.isExpired ? Palette.danger
-                        : (profile.daysRemaining < 30 ? Palette.warning : Palette.success))
-                    .frame(width: proxy.size.width * (elapsed / total))
+                    .fill(remainingColor)
+                    .frame(width: proxy.size.width * (remaining / total))
             }
         }
         .frame(width: 90, height: 5)
-        .help("创建于 \(Self.dayFormatter.string(from: profile.creation))")
+        .help(String(
+            format: "剩余 %.0f%%（共 %d 天，已过 %d 天）",
+            remaining / total * 100,
+            Int(total / 86_400),
+            Int(elapsed / 86_400)
+        ))
+    }
+
+    /// Traffic light for the remaining time. Matches the header badge.
+    private var remainingColor: Color {
+        if profile.isExpired || profile.daysRemaining < 7 { return Palette.danger }
+        if profile.daysRemaining < 30 { return Palette.warning }
+        return Palette.success
     }
 
     private var certificatesSection: some View {

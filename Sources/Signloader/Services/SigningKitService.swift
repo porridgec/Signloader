@@ -451,14 +451,8 @@ enum SigningKitLoader {
 /// Where the p12 password comes from.
 ///
 /// Precedence: `SIGNLOADER_P12_PASSWORD` environment variable (scripting / CI)
-/// → Keychain → empty. It is never hardcoded and never written to UserDefaults,
-/// which are plaintext on disk.
-///
-/// The Keychain is read lazily, not in `init`: reading it during app startup put
-/// `SecItemCopyMatching` on the main thread, where an ACL prompt (which fires
-/// whenever the ad-hoc signature changes) deadlocks window creation. The read
-/// itself is non-prompting, so even a main-thread access returns promptly — but
-/// the first read still belongs off-main.
+/// → `~/.signloader/credentials` (0600) → empty. It is never hardcoded and
+/// never written to UserDefaults, which are plaintext to any reader.
 final class PasswordStore: @unchecked Sendable {
     static let shared = PasswordStore()
     static let environmentVariable = "SIGNLOADER_P12_PASSWORD"
@@ -476,7 +470,7 @@ final class PasswordStore: @unchecked Sendable {
     var password: String {
         lock.lock(); defer { lock.unlock() }
         if let cached { return cached }
-        let value = Keychain.read() ?? ""
+        let value = CredentialStore.read() ?? ""
         cached = value
         return value
     }
@@ -490,23 +484,15 @@ final class PasswordStore: @unchecked Sendable {
         lock.lock()
         cached = value
         lock.unlock()
-        // Keychain writes can surface an authorization prompt when the item's
-        // ACL predates this binary; never let that sit on the main thread.
-        DispatchQueue.global(qos: .userInitiated).async {
-            if value.isEmpty {
-                Keychain.delete()
-            } else {
-                Keychain.write(value)
-            }
+        if value.isEmpty {
+            CredentialStore.delete()
+        } else {
+            CredentialStore.write(value)
         }
     }
 
-    /// Hop off the caller's actor before the first Keychain read.
-    ///
-    /// The read is allowed to prompt: when the app's ad-hoc signature changed
-    /// since the item was written, macOS asks the user to re-authorise once.
-    /// Doing that off-main keeps the UI alive either way — a main-thread read
-    /// here used to deadlock window creation entirely.
+    /// Keeps the first credential read off the caller's actor. Not strictly
+    /// required now that storage is a plain file, but the contract is cheap.
     static func currentAsync() async -> String {
         await Task.detached(priority: .userInitiated) {
             shared.password

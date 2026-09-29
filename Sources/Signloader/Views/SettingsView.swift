@@ -5,7 +5,7 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
 
     /// Edited locally and saved explicitly: binding the field straight to
-    /// `model.password` would hit the Keychain on every keystroke.
+    /// `model.password` would rewrite the credential file on every keystroke.
     @State private var passwordDraft = ""
 
     var body: some View {
@@ -60,7 +60,7 @@ struct SettingsView: View {
                                 .disabled(passwordDraft == model.password)
                         }
                     }
-                    Text("密码只存本机 Keychain，不落盘、不进仓库。命令行可用 \(PasswordStore.environmentVariable) 环境变量覆盖。")
+                    Text("密码只存本机 \(CredentialStore.url.path)（权限 0600），不进仓库。命令行可用 \(PasswordStore.environmentVariable) 环境变量覆盖。")
                         .font(.system(size: 10))
                         .foregroundStyle(.secondary)
                     if model.kit.certificateURL != nil {

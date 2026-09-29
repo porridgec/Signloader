@@ -61,9 +61,7 @@ final class AppModel {
     /// The password as edited in Settings. Assigning **persists** it, so only a
     /// real user edit may assign here — startup populates the field through
     /// `adoptStoredPassword(_:)` instead. Assigning at startup used to rewrite
-    /// the Keychain item on every launch, re-pinning its ACL to the current
-    /// (freshly rebuilt, ad-hoc signed) binary and forcing an authorization
-    /// prompt on the next build.
+    /// the stored credential on every launch.
     var password: String {
         get { storedPassword }
         set {
@@ -114,8 +112,8 @@ final class AppModel {
         let defaults = UserDefaults.standard
         kitPath = defaults.string(forKey: Self.kitKey) ?? Self.expanded(Self.defaultKitPath)
         outputDirectory = defaults.string(forKey: Self.outKey) ?? Self.expanded(Self.defaultOutputDirectory)
-        // Deliberately not touching PasswordStore here: its first Keychain read
-        // must happen off-main (see PasswordStore).
+        // Deliberately not touching PasswordStore here: its first credential
+        // read must happen off-main (see PasswordStore).
         storedPassword = ""
         if let data = defaults.data(forKey: Self.optsKey),
            let decoded = try? JSONDecoder().decode(SigningOptions.self, from: data) {
@@ -212,9 +210,8 @@ final class AppModel {
 
         // The kit loader parses the certificate, so the password has to be in
         // hand first. This is also the only place it is pulled into the UI.
-        // Off-main: a Keychain read that needs an ACL prompt must never sit on
-        // the thread that is building the window. Populated via
-        // `adoptStoredPassword` so it does not write back.
+        // Off-main, for symmetry with the rest of the credential path. Populated
+        // via `adoptStoredPassword` so it does not write back.
         if PasswordStore.shared.isManagedByEnvironment {
             adoptStoredPassword(PasswordStore.shared.password)
         } else {
@@ -232,7 +229,7 @@ final class AppModel {
         if let cert = kit.certificate {
             log("证书：\(cert.commonName) · \(cert.expiryLabel)", cert.isValid ? .success : .warning)
         } else if kit.certificateURL != nil {
-            log("找到 p12 但没解析出证书：密码可能没填或不对（设置里填一次，存 Keychain）。", .warning)
+            log("找到 p12 但没解析出证书：密码可能没填或不对（设置里填一次，会存到 ~/.signloader/credentials）。", .warning)
         } else {
             log("未找到 p12 证书，请在设置里指定工具包目录。", .warning)
         }

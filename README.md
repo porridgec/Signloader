@@ -36,7 +36,8 @@ Signloader 面向一个目录结构，默认 `~/.signloader/kit`（可在设置�
    | 2 | `bundleid`（完全一致） | 可覆盖安装 |
    | 3 | `TEAM.*`（通配符） | 任意 bundle id 可签，但只能新装 |
 
-   每行右侧的 ⓘ 可展开**详情**：App ID / UUID / 团队 / 有效期（带剩余寿命进度条）/ 平台 / 重复副本数，以及：
+   每行右侧的 ⓘ 可展开**详情**：App ID / UUID / 团队 / 有效期 / 平台 / 重复副本数，以及：
+   - **有效期进度条** — 绿色部分是**剩余**寿命，按剩余时间变色：绿（充裕）→ 黄（< 30 天）→ 红（< 7 天或已过期，此时整条轨道变红）。悬停可看剩余百分比。
    - **证书** — profile 内嵌的每张证书（CN、团队、有效期），并标出哪张是当前 p12 里的那张；过期证书会单独标记。解析在进程内完成（手写 DER 解码），不为每张证书 spawn 一次 `openssl`。
    - **设备** — 全部已注册 UDID，可搜索、可复制；正在连接的设备会标「已连接」。
    - **Entitlements** — 完整键值列表。
@@ -76,20 +77,20 @@ Signloader verify signed.ipa -m <app-identifier>
 
 ## 安全说明
 
-- **密码只存 Keychain**（`kSecAttrAccessibleWhenUnlockedThisDeviceOnly`），不写 UserDefaults、不进仓库。命令行用 `SIGNLOADER_P12_PASSWORD` 覆盖。
-- **启动只读不写**。早期版本每次启动都会把密码写回 Keychain，条目的 ACL 因此被重新钉在「当次构建的二进制」上——app 是 ad-hoc 签名，重签后 cdhash 变了，下一次启动就弹授权框。这是"每次构建都要授权"的根因。
-- 修改密码时的 `SecItemUpdate` 是原地更新，不碰 ACL。
-- Keychain 只在后台线程读：万一遇到需要授权的条目，弹框也不会卡在正在构建窗口的主线程上。
-- **想彻底免弹框**（代价：本机任意进程可读，等价于 0600 文件），一次性执行：
-  ```bash
-  security delete-generic-password -a default -s app.signloader.p12-password 2>/dev/null
-  security add-generic-password -a default -s app.signloader.p12-password -w '<密码>' -A
-  ```
-  程序内无法创建等价的「信任所有应用」条目（`SecAccessCreate` 传空列表实测不生效，且已弃用），所以只能用 `security -A`。
+- **密码存 `~/.signloader/credentials`（0600）**，不进仓库、不写 UserDefaults。命令行用 `SIGNLOADER_P12_PASSWORD` 覆盖。
+- **启动只读不写**：早期版本每次启动都把密码写回存储。
 - **日志与错误信息里的密码会脱敏**成 `••••••`。
 - 签名过程不发起任何网络请求。
 - ⚠️ 已知限制：`zsign` 只接受命令行传密码，签名运行的几秒内本机 `ps` 能看到该参数。这是 zsign 的接口限制；介意的话在无其他用户的环境下使用。
 - 工具本身只做「用自己的证书签自己的 IPA」，请遵守 Apple 开发者协议和当地法律。
+
+### 为什么不用 Keychain 存密码
+
+试过，走不通，根源在这个 app 的发布形态：
+
+- Keychain 条目的访问控制绑定在**写入它的那份二进制的代码签名**上；本 app 是 ad-hoc 签名，每次 `build.sh` 都产生新的 cdhash，于是每次重建后读取都弹一次授权。
+- 想建「信任所有应用」的条目绕过去：`SecAccessCreate` 传 `nil` / 空列表实测无效（跨进程读照样等授权）；`security add-generic-password -A` 也无效——陌生进程读它仍会阻塞约 10 秒等 SecurityAgent。
+- 结论：对频繁重签的本地工具，Keychain 的 ACL 模型不适用。改用 0600 文件（`gh`、`npm`、`ssh` 均如此），信任边界同为「本机该用户的任意进程」，但没有弹框。
 
 ## 实现上的几个坑
 
@@ -110,7 +111,7 @@ Sources/Signloader/
 ├── AppModel.swift              # @Observable 状态与动作
 ├── Support/
 │   ├── Shell.swift             # async Process 封装（流式输出、脱敏、不死锁）
-│   ├── Keychain.swift          # 密码存储
+│   ├── CredentialStore.swift    # 密码存储（0600 文件）
 │   ├── DER.swift               # 最小 X.509 解码（profile 内嵌证书）
 │   └── CLI.swift               # 命令行前端
 ├── Models/                     # ProvisionProfile / IPAInfo / Device / SigningOptions
