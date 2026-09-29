@@ -31,13 +31,18 @@ enum Keychain {
     static func write(_ value: String) {
         let data = Data(value.utf8)
         let attributes: [String: Any] = [kSecValueData as String: data]
-        if SecItemUpdate(baseQuery as CFDictionary, attributes as CFDictionary) == errSecItemNotFound {
-            var add = baseQuery
-            add[kSecValueData as String] = data
-            // Never synced to iCloud, not readable from the lock screen.
-            add[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
-            SecItemAdd(add as CFDictionary, nil)
+        if SecItemUpdate(baseQuery as CFDictionary, attributes as CFDictionary) == errSecSuccess {
+            return
         }
+        // Update fails when the existing item's ACL doesn't cover this binary —
+        // which is the normal state after an ad-hoc re-sign. Replace the item
+        // outright so the current binary becomes trusted again.
+        SecItemDelete(baseQuery as CFDictionary)
+        var add = baseQuery
+        add[kSecValueData as String] = data
+        // Never synced to iCloud, not readable from the lock screen.
+        add[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+        SecItemAdd(add as CFDictionary, nil)
     }
 
     static func delete() {

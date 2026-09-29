@@ -4,7 +4,11 @@ struct ProfileCard: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
-        Card(
+        // `@Bindable` rather than a hand-rolled Binding(get:set:): only the
+        // projected binding from @Bindable registers with the observation
+        // system, so setting `detailProfile` actually invalidates this view and
+        // presents the sheet.
+        return Card(
             title: "描述文件 (\(model.kit.profiles.count))",
             systemImage: "checkmark.seal",
             accessory: AnyView(
@@ -33,7 +37,7 @@ struct ProfileCard: View {
                         color: .secondary
                     )
                     HStack {
-                        Button("打开工具包") { model.revealKit() }
+                        Button("打开工具包") { model.revealKitInFinder() }
                         Button("从设备导出") { Task { await model.refreshProfilesFromDevice() } }
                             .disabled(model.selectedDevice == nil || model.isBusy)
                     }
@@ -65,57 +69,75 @@ struct ProfileCard: View {
         let isSelected = model.selectedProfile?.id == profile.id
         let kind = model.ipa.map { profile.matchKind(for: $0.bundleID) } ?? .none
 
-        return Button {
-            model.selectedProfile = profile
-            model.lastProfileSelectionWasAutomatic = false
-            model.log("选择 profile：\(profile.appIdentifier)", .info)
-        } label: {
-            HStack(spacing: 8) {
-                Image(systemName: isSelected ? "largecircle.fill.circle" : "circle")
-                    .font(.system(size: 12))
-                    .foregroundStyle(isSelected ? Palette.accent : Color.secondary.opacity(0.5))
+        return HStack(spacing: 6) {
+            // Tapping anywhere selects; the info button sits outside so it
+            // doesn't drag the selection along with it.
+            Button {
+                model.selectedProfile = profile
+                model.lastProfileSelectionWasAutomatic = false
+                model.log("选择 profile：\(profile.appIdentifier)", .info)
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: isSelected ? "largecircle.fill.circle" : "circle")
+                        .font(.system(size: 12))
+                        .foregroundStyle(isSelected ? Palette.accent : Color.secondary.opacity(0.5))
 
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 5) {
-                        Text(profile.displayBundleID)
-                            .font(.system(size: 11, design: .monospaced))
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                        if profile.isWildcard {
-                            Badge(text: "*", color: .secondary)
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 5) {
+                            Text(profile.displayBundleID)
+                                .font(.system(size: 11, design: .monospaced))
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                            if profile.isWildcard {
+                                Badge(text: "*", color: .secondary)
+                            }
+                        }
+                        HStack(spacing: 5) {
+                            Text("\(profile.expiryLabel) · \(profile.deviceCount) 设备")
+                                .font(.system(size: 10))
+                                .foregroundStyle(expiryColor(profile))
+                            if profile.duplicateCount > 1 {
+                                Text("×\(profile.duplicateCount)")
+                                    .font(.system(size: 9))
+                                    .foregroundStyle(.tertiary)
+                                    .help("工具包里有 \(profile.duplicateCount) 份相同内容的副本")
+                            }
+                            if model.ipa != nil {
+                                Badge(text: kind.label, color: kindColor(kind))
+                            }
                         }
                     }
-                    HStack(spacing: 5) {
-                        Text(profile.expiryLabel)
+
+                    Spacer(minLength: 4)
+
+                    if profile.isWildcard {
+                        Image(systemName: "wand.and.stars")
                             .font(.system(size: 10))
-                            .foregroundStyle(expiryColor(profile))
-                        if profile.duplicateCount > 1 {
-                            Text("×\(profile.duplicateCount)")
-                                .font(.system(size: 9))
-                                .foregroundStyle(.tertiary)
-                                .help("工具包里有 \(profile.duplicateCount) 份相同内容的副本")
-                        }
-                        if model.ipa != nil {
-                            Badge(text: kind.label, color: kindColor(kind))
-                        }
+                            .foregroundStyle(.tertiary)
+                            .help("通配符 profile：任何 bundle id 都能签，但只能新装")
                     }
                 }
-
-                Spacer(minLength: 4)
-
-                if profile.isWildcard {
-                    Image(systemName: "wand.and.stars")
-                        .font(.system(size: 10))
-                        .foregroundStyle(.tertiary)
-                        .help("通配符 profile：任何 bundle id 都能签，但只能新装")
-                }
+                .padding(.leading, 12)
+                .padding(.vertical, 6)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .contentShape(Rectangle())
-            .background(isSelected ? Palette.accent.opacity(0.12) : .clear)
+            .buttonStyle(.plain)
+
+            Button {
+                model.detailProfile = profile
+            } label: {
+                Image(systemName: "info.circle")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 22, height: 22)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.borderless)
+            .help("查看详情：设备、证书、entitlements")
         }
-        .buttonStyle(.plain)
+        .padding(.trailing, 8)
+        .background(isSelected ? Palette.accent.opacity(0.12) : .clear)
     }
 
     private func expiryColor(_ profile: ProvisionProfile) -> Color {

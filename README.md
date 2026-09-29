@@ -35,6 +35,11 @@ Signloader 面向一个目录结构，默认 `~/.signloader/kit`（可在设置�
    | 1 | `TEAM.bundleid.TEAM`（团队后缀） | 能覆盖安装、保留应用数据 |
    | 2 | `bundleid`（完全一致） | 可覆盖安装 |
    | 3 | `TEAM.*`（通配符） | 任意 bundle id 可签，但只能新装 |
+
+   每行右侧的 ⓘ 可展开**详情**：App ID / UUID / 团队 / 有效期（带剩余寿命进度条）/ 平台 / 重复副本数，以及：
+   - **证书** — profile 内嵌的每张证书（CN、团队、有效期），并标出哪张是当前 p12 里的那张；过期证书会单独标记。解析在进程内完成（手写 DER 解码），不为每张证书 spawn 一次 `openssl`。
+   - **设备** — 全部已注册 UDID，可搜索、可复制；正在连接的设备会标「已连接」。
+   - **Entitlements** — 完整键值列表。
 3. **签名**（`S`）。默认直接 `zsign`；超过 500 MB 自动建议「大 App 安全模式」。
 4. **安装**（`I`）。USB 连上设备即可，标题栏选设备。
 5. 右侧日志实时输出 `zsign` / `ideviceinstaller` 的完整输出；签完给出校验：有没有 `_CodeSignature`、有没有内嵌 profile、内嵌的 `application-identifier` 是否与所选 profile 一致（这决定能不能覆盖安装）。
@@ -49,6 +54,7 @@ Signloader 面向一个目录结构，默认 `~/.signloader/kit`（可在设置�
 
 ```bash
 Signloader profiles                     # 列出工具包里的 profile
+Signloader profiles -v -m <子串>         # 展开单个 profile 的设备/证书/entitlements
 Signloader devices                      # 列出已连接设备
 Signloader info game.ipa [--json]       # 解析 IPA
 Signloader sign game.ipa                # 签名（自动选 profile）
@@ -71,6 +77,7 @@ Signloader verify signed.ipa -m <app-identifier>
 ## 安全说明
 
 - **密码只存 Keychain**（`kSecAttrAccessibleWhenUnlockedThisDeviceOnly`），不写 UserDefaults、不进仓库。命令行用 `SIGNLOADER_P12_PASSWORD` 覆盖。
+- Keychain 只在后台线程读：如果条目的 ACL 不认当前二进制（ad-hoc 重签后常见），macOS 会弹一次授权框——绝不能让这个弹框卡在正在构建窗口的主线程上。若想彻底免弹框，可以自己建条目时用 `security add-generic-password … -A`（代价是本机任意进程可读，自行权衡）。
 - **日志与错误信息里的密码会脱敏**成 `••••••`。
 - 签名过程不发起任何网络请求。
 - ⚠️ 已知限制：`zsign` 只接受命令行传密码，签名运行的几秒内本机 `ps` 能看到该参数。这是 zsign 的接口限制；介意的话在无其他用户的环境下使用。
@@ -96,6 +103,7 @@ Sources/Signloader/
 ├── Support/
 │   ├── Shell.swift             # async Process 封装（流式输出、脱敏、不死锁）
 │   ├── Keychain.swift          # 密码存储
+│   ├── DER.swift               # 最小 X.509 解码（profile 内嵌证书）
 │   └── CLI.swift               # 命令行前端
 ├── Models/                     # ProvisionProfile / IPAInfo / Device / SigningOptions
 ├── Services/

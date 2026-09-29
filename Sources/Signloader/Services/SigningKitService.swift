@@ -68,12 +68,26 @@ enum SigningKitLoader {
         let certificateCount: Int
         let deviceCount: Int
         let isXcodeManaged: Bool
+        let platforms: [String]
+        let devices: [String]
+        let entitlements: [String: String]
+        let certificates: [CertRecord]
+
+        struct CertRecord: Codable {
+            let commonName: String
+            let teamID: String
+            let notBefore: Double?
+            let notAfter: Double?
+        }
     }
 
     private struct Cache: Codable {
         let version: Int
         let entries: [String: Record]
     }
+
+    /// Bump whenever `Record` gains fields, so stale caches re-parse.
+    private static let cacheVersion = 2
 
     private static var cacheURL: URL {
         let base = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
@@ -166,28 +180,22 @@ enum SigningKitLoader {
             table[key] = profile
             return
         }
-        // Keep the freshest copy, count the rest as duplicates.
-        if profile.expiration > existing.expiration {
-            table[key] = ProvisionProfile(
-                id: profile.id, url: profile.url, uuid: profile.uuid, name: profile.name,
-                teamID: profile.teamID, appIdentifier: profile.appIdentifier,
-                bundleID: profile.bundleID, expiration: profile.expiration,
-                creation: profile.creation, certificateCount: profile.certificateCount,
-                deviceCount: profile.deviceCount,
-                duplicateCount: existing.duplicateCount + 1,
-                isXcodeManaged: profile.isXcodeManaged
-            )
-        } else {
-            table[key] = ProvisionProfile(
-                id: existing.id, url: existing.url, uuid: existing.uuid, name: existing.name,
-                teamID: existing.teamID, appIdentifier: existing.appIdentifier,
-                bundleID: existing.bundleID, expiration: existing.expiration,
-                creation: existing.creation, certificateCount: existing.certificateCount,
-                deviceCount: existing.deviceCount,
-                duplicateCount: existing.duplicateCount + 1,
-                isXcodeManaged: existing.isXcodeManaged
-            )
-        }
+        // Identical content ⇒ identical details. Keep the freshest copy, count
+        // the rest as duplicates.
+        let keep = profile.expiration >= existing.expiration ? profile : existing
+        table[key] = ProvisionProfile(
+            id: keep.id, url: keep.url, uuid: keep.uuid, name: keep.name,
+            teamID: keep.teamID, appIdentifier: keep.appIdentifier,
+            bundleID: keep.bundleID, expiration: keep.expiration,
+            creation: keep.creation, certificateCount: keep.certificateCount,
+            deviceCount: keep.deviceCount,
+            duplicateCount: existing.duplicateCount + 1,
+            isXcodeManaged: keep.isXcodeManaged,
+            platforms: keep.platforms,
+            devices: keep.devices,
+            entitlements: keep.entitlements,
+            certificates: keep.certificates
+        )
     }
 
     // MARK: Decoding
@@ -212,7 +220,18 @@ enum SigningKitLoader {
             certificateCount: record.certificateCount,
             deviceCount: record.deviceCount,
             duplicateCount: 1,
-            isXcodeManaged: record.isXcodeManaged
+            isXcodeManaged: record.isXcodeManaged,
+            platforms: record.platforms,
+            devices: record.devices,
+            entitlements: record.entitlements,
+            certificates: record.certificates.map {
+                ProfileCertificate(
+                    commonName: $0.commonName,
+                    teamID: $0.teamID,
+                    notBefore: $0.notBefore.map(Date.init(timeIntervalSince1970:)),
+                    notAfter: $0.notAfter.map(Date.init(timeIntervalSince1970:))
+                )
+            }
         )
     }
 
@@ -233,7 +252,17 @@ enum SigningKitLoader {
         let expiration = (dict["ExpirationDate"] as? Date) ?? Date.distantPast
         let creation = (dict["CreationDate"] as? Date) ?? Date.distantPast
         let certs = dict["DeveloperCertificates"] as? [Data] ?? []
-        let devices = dict["ProvisionedDevices"] as? [String] ?? []
+        let devices = ((dict["ProvisionedDevices"] as? [String]) ?? [])
+            .filter { !$0.isEmpty }
+        let entitlementsRaw = dict["Entitlements"] as? [String: Any] ?? [:]
+        let platforms = ((dict["Platform"] as? [String]) ?? [])
+            .filter { !$0.isEmpty }
+
+        // Flatten entitlement values to display strings.
+        var flattenedEntitlements: [String: String] = [:]
+        for (key, value) in entitlementsRaw {
+            flattenedEntitlements[key] = flatten(value)
+        }
 
         return Record(
             uuid: dict["UUID"] as? String ?? url.deletingPathExtension().lastPathComponent,
@@ -245,8 +274,38 @@ enum SigningKitLoader {
             creation: creation.timeIntervalSince1970,
             certificateCount: max(certs.count, 1),
             deviceCount: devices.count,
-            isXcodeManaged: (dict["IsXcodeManaged"] as? Bool) ?? false
+            isXcodeManaged: (dict["IsXcodeManaged"] as? Bool) ?? false,
+            platforms: platforms,
+            devices: devices,
+            entitlements: flattenedEntitlements,
+            certificates: certs.map { der in
+                if let summary = DER.certificateSummary(der) {
+                    return Record.CertRecord(
+                        commonName: summary.commonName,
+                        teamID: summary.teamID,
+                        notBefore: summary.notBefore?.timeIntervalSince1970,
+                        notAfter: summary.notAfter?.timeIntervalSince1970
+                    )
+                }
+                return Record.CertRecord(commonName: "", teamID: "", notBefore: nil, notAfter: nil)
+            }
         )
+    }
+
+    private static func flatten(_ value: Any) -> String {
+        switch value {
+        case let string as String: return string
+        case let bool as Bool: return bool ? "是" : "否"
+        case let int as Int: return String(int)
+        case let double as Double: return String(double)
+        case let array as [Any]: return array.map(flatten).joined(separator: ", ")
+        case let date as Date:
+            let formatter = DateFormatter()
+            formatter.dateFormat = "yyyy-MM-dd HH:mm"
+            return formatter.string(from: date)
+        case let data as Data: return "<\(data.count) bytes>"
+        default: return String(describing: value)
+        }
     }
 
     // MARK: Cache
@@ -261,7 +320,7 @@ enum SigningKitLoader {
     private static func readCache() -> Cache {
         guard let data = try? Data(contentsOf: cacheURL),
               let cache = try? JSONDecoder().decode(Cache.self, from: data),
-              cache.version == 1 else { return Cache(version: 1, entries: [:]) }
+              cache.version == cacheVersion else { return Cache(version: cacheVersion, entries: [:]) }
         return cache
     }
 
@@ -394,28 +453,32 @@ enum SigningKitLoader {
 /// Precedence: `SIGNLOADER_P12_PASSWORD` environment variable (scripting / CI)
 /// → Keychain → empty. It is never hardcoded and never written to UserDefaults,
 /// which are plaintext on disk.
+///
+/// The Keychain is read lazily, not in `init`: reading it during app startup put
+/// `SecItemCopyMatching` on the main thread, where an ACL prompt (which fires
+/// whenever the ad-hoc signature changes) deadlocks window creation. The read
+/// itself is non-prompting, so even a main-thread access returns promptly — but
+/// the first read still belongs off-main.
 final class PasswordStore: @unchecked Sendable {
     static let shared = PasswordStore()
     static let environmentVariable = "SIGNLOADER_P12_PASSWORD"
 
     private let lock = NSLock()
-    private var cached: String
+    private var cached: String?
     private let fromEnvironment: Bool
 
     private init() {
         let env = ProcessInfo.processInfo.environment[Self.environmentVariable] ?? ""
-        if !env.isEmpty {
-            fromEnvironment = true
-            cached = env
-        } else {
-            fromEnvironment = false
-            cached = Keychain.read() ?? ""
-        }
+        fromEnvironment = !env.isEmpty
+        if fromEnvironment { cached = env }
     }
 
     var password: String {
         lock.lock(); defer { lock.unlock() }
-        return cached
+        if let cached { return cached }
+        let value = Keychain.read() ?? ""
+        cached = value
+        return value
     }
 
     /// True when the value came from the environment; writes are ignored in
@@ -427,10 +490,26 @@ final class PasswordStore: @unchecked Sendable {
         lock.lock()
         cached = value
         lock.unlock()
-        if value.isEmpty {
-            Keychain.delete()
-        } else {
-            Keychain.write(value)
+        // Keychain writes can surface an authorization prompt when the item's
+        // ACL predates this binary; never let that sit on the main thread.
+        DispatchQueue.global(qos: .userInitiated).async {
+            if value.isEmpty {
+                Keychain.delete()
+            } else {
+                Keychain.write(value)
+            }
         }
+    }
+
+    /// Hop off the caller's actor before the first Keychain read.
+    ///
+    /// The read is allowed to prompt: when the app's ad-hoc signature changed
+    /// since the item was written, macOS asks the user to re-authorise once.
+    /// Doing that off-main keeps the UI alive either way — a main-thread read
+    /// here used to deadlock window creation entirely.
+    static func currentAsync() async -> String {
+        await Task.detached(priority: .userInitiated) {
+            shared.password
+        }.value
     }
 }

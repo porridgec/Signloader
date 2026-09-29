@@ -35,6 +35,13 @@ struct ContentView: View {
             }
         }
         .sheet(isPresented: $showSettings) { SettingsView().environment(model) }
+        .sheet(item: Binding(
+            get: { model.detailProfile },
+            set: { model.detailProfile = $0 }
+        )) { profile in
+            ProfileDetailView(profile: profile)
+                .environment(model)
+        }
         .fileImporter(
             isPresented: $showIPAFileImporter,
             allowedContentTypes: [UTType(filenameExtension: "ipa") ?? .data],

@@ -1,5 +1,35 @@
 import Foundation
 
+/// One of the `DeveloperCertificates` embedded in a profile, decoded in-process
+/// from DER (see `DER.swift`).
+struct ProfileCertificate: Hashable, Sendable {
+    let commonName: String
+    let teamID: String
+    let notBefore: Date?
+    let notAfter: Date?
+
+    var isExpired: Bool { (notAfter ?? .distantPast) < Date() }
+
+    var validityLabel: String {
+        guard let notAfter else { return "未知" }
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        let end = formatter.string(from: notAfter)
+        if isExpired { return "已于 \(end) 过期" }
+        let days = Calendar.current.dateComponents([.day], from: Date(), to: notAfter).day ?? 0
+        if days < 30 { return "\(end)（\(days) 天）" }
+        return end
+    }
+
+    /// Same identity as the kit's p12? Matched on subject plus expiry (with a
+    /// small tolerance, since one side round-trips through an openssl text dump).
+    func matches(_ other: SigningCertificate?) -> Bool {
+        guard let other, !other.commonName.isEmpty, other.commonName == commonName else { return false }
+        guard let mine = notAfter, let theirs = other.notAfter else { return true }
+        return abs(mine.timeIntervalSince(theirs)) < 120
+    }
+}
+
 /// A parsed `.mobileprovision` decoded out of the signing kit.
 struct ProvisionProfile: Identifiable, Hashable, Sendable {
     enum MatchKind: String, Sendable {
@@ -34,6 +64,13 @@ struct ProvisionProfile: Identifiable, Hashable, Sendable {
     /// How many byte-identical copies of this profile exist in the kit.
     let duplicateCount: Int
     let isXcodeManaged: Bool
+
+    // Detail payload (shown in ProfileDetailView).
+    let platforms: [String]
+    let devices: [String]
+    /// Entitlements flattened to display strings; arrays become ", "-joined.
+    let entitlements: [String: String]
+    let certificates: [ProfileCertificate]
 
     var isWildcard: Bool { bundleID == "*" }
 

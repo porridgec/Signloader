@@ -23,6 +23,7 @@ enum CLI {
         var removeWatch = false
         var kit: String?
         var json = false
+        var verbose = false
         var help = false
     }
 
@@ -49,6 +50,7 @@ enum CLI {
             case "--remove-watch": options.removeWatch = true
             case "--kit", "-k": options.kit = value()
             case "--json": options.json = true
+            case "-v", "--verbose": options.verbose = true
             default:
                 if !arg.hasPrefix("-") { options.positional.append(arg) }
             }
@@ -81,6 +83,8 @@ enum CLI {
           --remove-watch         移除 Watch App
       -k, --kit <path>           指定 _signing-kit 目录
           --json                 以 JSON 输出（info / profiles / devices）
+      -v, --verbose              profiles: 展开单个 profile 的设备/证书/entitlements
+                                  （与 -m 连用，或默认取第一个匹配）
     """
 
     /// Exit code for the process. 0 = success.
@@ -103,7 +107,12 @@ enum CLI {
 
         do {
             switch args.first {
-            case "profiles": try await printProfiles(kit, json: options.json)
+            case "profiles":
+                if options.verbose {
+                    try await printProfileDetail(options, kit: kit)
+                } else {
+                    try await printProfiles(kit, json: options.json)
+                }
             case "devices": try await printDevices(json: options.json)
             case "info": try await printInfo(options, operand: operands.first)
             case "sign": try await sign(options, operand: operands.first, kit: kit)
@@ -152,6 +161,59 @@ enum CLI {
             print("      \(profile.appIdentifier) · \(profile.expiryLabel)")
         }
         for problem in kit.problems { print("  ! \(problem)") }
+    }
+
+    // MARK: Profile detail (CLI mirror of ProfileDetailView)
+
+    private static func printProfileDetail(_ options: Options, kit: SigningKit) async throws {
+        let candidates: [ProvisionProfile]
+        if let query = options.profile {
+            candidates = kit.profiles.filter {
+                $0.displayBundleID.localizedCaseInsensitiveContains(query)
+                    || $0.appIdentifier.localizedCaseInsensitiveContains(query)
+            }
+        } else {
+            candidates = kit.profiles
+        }
+        guard let profile = candidates.first else {
+            throw CLIError.usage(options.profile.map { "没有匹配「\($0)」的 profile" } ?? "工具包里没有 profile")
+        }
+
+        let day = DateFormatter()
+        day.dateFormat = "yyyy-MM-dd HH:mm"
+
+        print("名称      \(profile.name)")
+        print("App ID    \(profile.appIdentifier)")
+        print("团队      \(profile.teamID)")
+        print("UUID      \(profile.uuid)")
+        print("创建      \(day.string(from: profile.creation))")
+        print("到期      \(day.string(from: profile.expiration))（\(profile.expiryLabel)）")
+        print("平台      \(profile.platforms.joined(separator: ", "))")
+        print("Xcode托管 \(profile.isXcodeManaged ? "是" : "否")")
+        print("副本      \(profile.duplicateCount) 份相同内容")
+        print("文件      \(profile.url.path)")
+
+        print("")
+        print("证书 (\(profile.certificates.count))")
+        let kitCert = kit.certificate
+        for (index, cert) in profile.certificates.enumerated() {
+            let marker = cert.matches(kitCert) ? "  ← 当前 p12" : ""
+            print("  [\(index)] \(cert.commonName.isEmpty ? "(无法解析)" : cert.commonName)\(marker)")
+            print("        团队 \(cert.teamID)  \(cert.validityLabel)")
+        }
+
+        print("")
+        print("设备 (\(profile.devices.count))")
+        for udid in profile.devices {
+            print("  \(udid)")
+        }
+        if profile.devices.isEmpty { print("  （无 —— 分发类 profile）") }
+
+        print("")
+        print("Entitlements (\(profile.entitlements.count))")
+        for (key, value) in profile.entitlements.sorted(by: { $0.key < $1.key }) {
+            print("  \(key) = \(value)")
+        }
     }
 
     // MARK: devices

@@ -76,6 +76,7 @@ final class AppModel {
     var kit = SigningKit(root: URL(fileURLWithPath: "/"), certificateURL: nil, certificate: nil, profiles: [], scannedFileCount: 0, problems: [])
     var ipa: IPAInfo?
     var selectedProfile: ProvisionProfile?
+    var detailProfile: ProvisionProfile?
     var outputURL: URL?
     var lastOutcome: SignOutcome?
     var selectedDevice: Device?
@@ -96,7 +97,9 @@ final class AppModel {
         let defaults = UserDefaults.standard
         kitPath = defaults.string(forKey: Self.kitKey) ?? Self.expanded(Self.defaultKitPath)
         outputDirectory = defaults.string(forKey: Self.outKey) ?? Self.expanded(Self.defaultOutputDirectory)
-        password = PasswordStore.shared.password
+        // Deliberately not touching PasswordStore here: its first Keychain read
+        // must happen off-main (see PasswordStore).
+        password = ""
         if let data = defaults.data(forKey: Self.optsKey),
            let decoded = try? JSONDecoder().decode(SigningOptions.self, from: data) {
             options = decoded
@@ -189,6 +192,17 @@ final class AppModel {
         guard !isBusy else { return }
         busy = .scanningKit
         defer { busy = .idle }
+
+        // The kit loader parses the certificate, so the password has to be in
+        // hand first. This is also the only place it is pulled into the UI.
+        // Off-main: a Keychain read that needs an ACL prompt must never sit on
+        // the thread that is building the window.
+        if PasswordStore.shared.isManagedByEnvironment {
+            password = PasswordStore.shared.password
+        } else {
+            password = await PasswordStore.currentAsync()
+        }
+
         let root = resolvedKitURL
         log("扫描签名工具包：\(root.path)", .info)
         kit = await SigningKitLoader.load(root: root)
@@ -199,10 +213,14 @@ final class AppModel {
         for problem in kit.problems.prefix(5) { log(problem, .warning) }
         if let cert = kit.certificate {
             log("证书：\(cert.commonName) · \(cert.expiryLabel)", cert.isValid ? .success : .warning)
+        } else if kit.certificateURL != nil {
+            log("找到 p12 但没解析出证书：密码可能没填或不对（设置里填一次，存 Keychain）。", .warning)
         } else {
-            log("未找到 p12 证书，请在设置里指定。", .warning)
+            log("未找到 p12 证书，请在设置里指定工具包目录。", .warning)
         }
+
         reselectProfile(automatic: true)
+
     }
 
     // MARK: IPA
