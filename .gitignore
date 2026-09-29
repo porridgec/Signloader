@@ -1,0 +1,7 @@
+.build/
+build/
+Resources/AppIcon.icns
+Resources/AppIcon.iconset/
+.DS_Store
+*.ipa
+.zsign_cache/
