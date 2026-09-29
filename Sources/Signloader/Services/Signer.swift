@@ -73,10 +73,19 @@ struct Signer: Sendable {
     private func runSafe(_ request: SignRequest, onLine: @escaping @Sendable ([String]) -> Void) async throws {
         let work = request.output.deletingLastPathComponent()
             .appendingPathComponent(".signloader-\(UUID().uuidString.prefix(8))")
-        try fm.createDirectory(at: work, withIntermediateDirectories: true)
+        // The work dir sits next to the output, which may be a shared location
+        // (~/Desktop, a mounted volume); keep its contents to this user.
+        try fm.createDirectory(
+            at: work, withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
         defer { try? fm.removeItem(at: work) }
 
         onLine(["── 解包 IPA ──"])
+        // Zip-slip guard: the archive is untrusted input, and `unzip -d` does
+        // not reliably neutralise `../` components on its own.
+        let entries = try await IPAParser.entries(of: request.ipa)
+        try IPAParser.validateEntries(entries)
         try await Shell.run("/usr/bin/unzip", ["-q", "-o", request.ipa.path, "-d", work.path], onLine: onLine)
 
         let appFolder = work.appendingPathComponent(request.appPath)

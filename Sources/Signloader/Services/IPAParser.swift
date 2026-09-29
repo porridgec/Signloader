@@ -6,6 +6,7 @@ enum IPAError: LocalizedError {
     case noAppBundle
     case unreadableInfoPlist
     case noBundleIdentifier
+    case unsafeEntry(String)
 
     var errorDescription: String? {
         switch self {
@@ -14,6 +15,7 @@ enum IPAError: LocalizedError {
         case .noAppBundle: return "IPA 里没有 Payload/*.app 目录，可能不是 iOS App 包。"
         case .unreadableInfoPlist: return "无法读取 Payload/*.app/Info.plist。"
         case .noBundleIdentifier: return "Info.plist 里缺少 CFBundleIdentifier。"
+        case .unsafeEntry(let e): return "IPA 里有不安全的条目路径，拒绝处理：\(e)"
         }
     }
 }
@@ -23,13 +25,36 @@ enum IPAError: LocalizedError {
 enum IPAParser {
     private static let fm = FileManager.default
 
-    static func parse(url: URL) async throws -> IPAInfo {
-        guard fm.fileExists(atPath: url.path) else { throw IPAError.notFound(url.path) }
-
-        let entries = try await Shell.run("/usr/bin/unzip", ["-Z1", url.path]).stdout
+    /// Central-directory listing of an archive, via `unzip -Z1` (does not
+    /// decompress anything).
+    static func entries(of url: URL) async throws -> [String] {
+        try await Shell.run("/usr/bin/unzip", ["-Z1", url.path]).stdout
             .split(separator: "\n")
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
+    }
+
+    /// Reject entries that could escape the extraction directory (zip-slip) or
+    /// be mistaken for option arguments by a later `unzip -p <ipa> <entry>` call.
+    /// IPAs are untrusted input — a crafted archive is the threat model here.
+    static func validateEntries(_ entries: [String]) throws {
+        for entry in entries {
+            if entry.hasPrefix("/") || entry.hasPrefix("-") || entry.hasPrefix("\\") {
+                throw IPAError.unsafeEntry(entry)
+            }
+            if entry.split(separator: "/", omittingEmptySubsequences: true).contains("..") {
+                throw IPAError.unsafeEntry(entry)
+            }
+        }
+    }
+
+    static func parse(url: URL) async throws -> IPAInfo {
+        guard fm.fileExists(atPath: url.path) else { throw IPAError.notFound(url.path) }
+
+        let entries = try await entries(of: url)
+
+        // Treat the archive as untrusted before pulling anything out of it.
+        try validateEntries(entries)
 
         guard let infoPlistEntry = entries.first(where: { isAppInfoPlist($0) }) else {
             if entries.isEmpty { throw IPAError.emptyArchive }
@@ -201,11 +226,17 @@ enum IPAParser {
     /// an embedded profile whose application-identifier equals the one we asked for.
     static func verify(signedIPA: URL, expectedAppIdentifier: String?) async -> Verification {
         var result = Verification()
-        guard let entries = try? await Shell.run("/usr/bin/unzip", ["-Z1", signedIPA.path]).stdout
-            .split(separator: "\n").map(String.init) else { return result }
+        guard let entries = try? await entries(of: signedIPA) else { return result }
 
-        result.hasCodeSignature = entries.contains { $0.contains("Payload/") && $0.hasSuffix("_CodeSignature/CodeResources") }
-        guard let profileEntry = entries.first(where: { $0.contains("Payload/") && $0.hasSuffix("embedded.mobileprovision") }) else {
+        // hasPrefix, not contains: the entry is passed straight to
+        // `unzip -p <ipa> <entry>`, and anything not anchored at Payload/ could
+        // be parsed as an option by a crafted archive.
+        result.hasCodeSignature = entries.contains {
+            $0.hasPrefix("Payload/") && $0.hasSuffix("_CodeSignature/CodeResources")
+        }
+        guard let profileEntry = entries.first(where: {
+            $0.hasPrefix("Payload/") && $0.hasSuffix("embedded.mobileprovision")
+        }) else {
             return result
         }
         result.hasEmbeddedProfile = true

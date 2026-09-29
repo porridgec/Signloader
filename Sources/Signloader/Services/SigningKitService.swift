@@ -326,8 +326,14 @@ enum SigningKitLoader {
 
     private static func writeCache(_ cache: Cache) {
         guard let data = try? JSONEncoder().encode(cache) else { return }
-        try? fm.createDirectory(at: cacheURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let dir = cacheURL.deletingLastPathComponent()
+        try? fm.createDirectory(
+            at: dir, withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
         try? data.write(to: cacheURL, options: .atomic)
+        // Carries device UDIDs and certificate subjects — treat as private.
+        try? fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: cacheURL.path)
     }
 
     // MARK: Certificate
