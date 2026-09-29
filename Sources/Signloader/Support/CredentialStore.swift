@@ -1,21 +1,13 @@
 import Foundation
 
-/// Password storage on disk (`~/.signloader/credentials`, mode 0600).
+/// Legacy password storage used while the app was ad-hoc signed: a 0600 file
+/// at `~/.signloader/credentials`. Kept only as a migration source — `PasswordStore`
+/// imports and deletes it the first time it runs with working Keychain access.
 ///
-/// Deliberately not the Keychain. This app is ad-hoc signed and rebuilt often,
-/// and a Keychain item's access control is bound to the code signature of the
-/// binary that wrote it — so every rebuild re-triggers an authorization prompt.
-/// None of the documented ways to create a "trust all applications" item works
-/// on current macOS:
-///
-/// - `SecAccessCreate` with a `nil` or empty trusted list still prompts
-///   (verified: cross-process read blocks)
-/// - `security add-generic-password -A` still prompts — a foreign process
-///   reading the item blocked for 10 s waiting on SecurityAgent
-///
-/// A 0600 file under the user's home is what comparable local tools use. It is
-/// readable by any process running as this user — which is the same trust
-/// boundary the Keychain item ended up with anyway, minus the prompts.
+/// For context, none of these produce a prompt-free Keychain item readable by an
+/// ad-hoc signed binary (whose cdhash changes every build):
+/// - `SecAccessCreate` with a `nil` or empty trusted list — still prompts
+/// - `security add-generic-password -A` — a foreign reader still blocks ~10 s
 enum CredentialStore {
     static var url: URL {
         FileManager.default.homeDirectoryForCurrentUser

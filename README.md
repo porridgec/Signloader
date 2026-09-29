@@ -11,6 +11,19 @@
 
 依赖：`brew install zsign libimobiledevice`。启动时会检查缺失的工具并在标题栏提示。
 
+### 签名身份（重要）
+
+`build.sh` 会自动用本机可用的签名证书（`security find-identity -v -p codesigning` 的第一个）给 app 签名，也可用环境变量指定：
+
+```bash
+SIGN_IDENTITY="Apple Development: you@example.com (TEAMID)" ./build.sh install
+```
+
+没有证书时回退到 ad-hoc。区别不只是 Gatekeeper：
+
+- **证书签名** → app 的指定要求（Designated Requirement）锚定在证书上，**每次重建都相同**，Keychain 里存的密码可以无感读取。
+- **ad-hoc 签名** → DR 就是当次二进制的 cdhash，每次构建都变；Keychain 条目的 ACL 永远对不上，**每次重建后首次读取都会弹授权框**。这种构建请用 `SIGNLOADER_P12_PASSWORD` 环境变量。
+
 ## 签名工具包（signing kit）
 
 Signloader 面向一个目录结构，默认 `~/.signloader/kit`（可在设置里改）：
@@ -77,20 +90,24 @@ Signloader verify signed.ipa -m <app-identifier>
 
 ## 安全说明
 
-- **密码存 `~/.signloader/credentials`（0600）**，不进仓库、不写 UserDefaults。命令行用 `SIGNLOADER_P12_PASSWORD` 覆盖。
-- **启动只读不写**：早期版本每次启动都把密码写回存储。
+- **密码存 Keychain**（`kSecAttrAccessibleWhenUnlockedThisDeviceOnly`：仅本设备、解锁时可读），不写 UserDefaults、不进仓库。命令行用 `SIGNLOADER_P12_PASSWORD` 覆盖。
+- **启动只读不写**：早期版本每次启动都把密码写回 Keychain，条目因此被反复重建，ACL 被钉在「当次构建的二进制」上，这是「每次构建都要授权」的第一个根因。
+- 修改密码时原地 `SecItemUpdate`，不动 ACL；Settings 里也是草稿 + 显式保存，不会每个按键写一次。
 - **日志与错误信息里的密码会脱敏**成 `••••••`。
 - 签名过程不发起任何网络请求。
 - ⚠️ 已知限制：`zsign` 只接受命令行传密码，签名运行的几秒内本机 `ps` 能看到该参数。这是 zsign 的接口限制；介意的话在无其他用户的环境下使用。
 - 工具本身只做「用自己的证书签自己的 IPA」，请遵守 Apple 开发者协议和当地法律。
 
-### 为什么不用 Keychain 存密码
+### Keychain 与签名身份的关系（踩坑记录）
 
-试过，走不通，根源在这个 app 的发布形态：
+「每次构建都要授权」其实有两个叠加的原因，都查实过：
 
-- Keychain 条目的访问控制绑定在**写入它的那份二进制的代码签名**上；本 app 是 ad-hoc 签名，每次 `build.sh` 都产生新的 cdhash，于是每次重建后读取都弹一次授权。
-- 想建「信任所有应用」的条目绕过去：`SecAccessCreate` 传 `nil` / 空列表实测无效（跨进程读照样等授权）；`security add-generic-password -A` 也无效——陌生进程读它仍会阻塞约 10 秒等 SecurityAgent。
-- 结论：对频繁重签的本地工具，Keychain 的 ACL 模型不适用。改用 0600 文件（`gh`、`npm`、`ssh` 均如此），信任边界同为「本机该用户的任意进程」，但没有弹框。
+1. **启动时把密码写回**（上面已修）：写回会用 `SecItemAdd` 重建条目，ACL 钉在当次二进制上。
+2. **ad-hoc 签名**：Keychain 条目的 ACL 匹配的是 app 的**指定要求（DR）**。证书签名的 DR 锚定在证书上（跨重建稳定）；ad-hoc 的 DR 就是 cdhash（每次构建都变）→ ACL 永远对不上。
+
+第二条没有绕路可走，三条都实测证伪：`SecAccessCreate` 传 `nil` / 空列表照样要授权；`security add-generic-password -A` 的条目被陌生进程读仍阻塞约 10 秒等 SecurityAgent。**正解是用证书签名**（见上文「签名身份」），DR 稳定后 Keychain 完全正常。
+
+期间短暂用过 `~/.signloader/credentials`（0600 文件）作为过渡；现在它只作为一次性迁移来源——新版本第一次读到文件会导入 Keychain 并删掉文件。ad-hoc 构建的用户仍建议用环境变量。
 
 ## 实现上的几个坑
 
@@ -111,7 +128,8 @@ Sources/Signloader/
 ├── AppModel.swift              # @Observable 状态与动作
 ├── Support/
 │   ├── Shell.swift             # async Process 封装（流式输出、脱敏、不死锁）
-│   ├── CredentialStore.swift    # 密码存储（0600 文件）
+│   ├── Keychain.swift          # 密码存储
+│   ├── CredentialStore.swift   # 旧版 0600 文件（迁移来源）
 │   ├── DER.swift               # 最小 X.509 解码（profile 内嵌证书）
 │   └── CLI.swift               # 命令行前端
 ├── Models/                     # ProvisionProfile / IPAInfo / Device / SigningOptions

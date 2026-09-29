@@ -451,8 +451,12 @@ enum SigningKitLoader {
 /// Where the p12 password comes from.
 ///
 /// Precedence: `SIGNLOADER_P12_PASSWORD` environment variable (scripting / CI)
-/// → `~/.signloader/credentials` (0600) → empty. It is never hardcoded and
-/// never written to UserDefaults, which are plaintext to any reader.
+/// → Keychain → empty. It is never hardcoded and never written to UserDefaults,
+/// which are plaintext to any reader.
+///
+/// A one-time migration pulls the password in from the 0600 file that earlier
+/// builds used while the app was ad-hoc signed (see `CredentialStore`), then
+/// removes the file.
 final class PasswordStore: @unchecked Sendable {
     static let shared = PasswordStore()
     static let environmentVariable = "SIGNLOADER_P12_PASSWORD"
@@ -470,7 +474,12 @@ final class PasswordStore: @unchecked Sendable {
     var password: String {
         lock.lock(); defer { lock.unlock() }
         if let cached { return cached }
-        let value = CredentialStore.read() ?? ""
+        var value = Keychain.read() ?? ""
+        if value.isEmpty, let legacy = CredentialStore.read() {
+            Keychain.write(legacy)
+            CredentialStore.delete()
+            value = legacy
+        }
         cached = value
         return value
     }
@@ -484,15 +493,18 @@ final class PasswordStore: @unchecked Sendable {
         lock.lock()
         cached = value
         lock.unlock()
-        if value.isEmpty {
-            CredentialStore.delete()
-        } else {
-            CredentialStore.write(value)
+        // Off-main: a Keychain write can surface an authorization prompt when
+        // the item's ACL predates this binary; never let that sit on main.
+        DispatchQueue.global(qos: .userInitiated).async {
+            if value.isEmpty {
+                Keychain.delete()
+            } else {
+                Keychain.write(value)
+            }
         }
     }
 
-    /// Keeps the first credential read off the caller's actor. Not strictly
-    /// required now that storage is a plain file, but the contract is cheap.
+    /// Keeps the first credential read off the caller's actor.
     static func currentAsync() async -> String {
         await Task.detached(priority: .userInitiated) {
             shared.password

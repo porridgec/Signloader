@@ -39,6 +39,35 @@ make_icon() {
   echo "   $ICON_ICNS ($(du -h "$ICON_ICNS" | cut -f1 | tr -d ' '))"
 }
 
+# ---------------------------------------------------------------- signing ---
+
+# Sign with a real identity when one is available: a Keychain item's ACL
+# matches the app's *designated requirement*, which for a certificate is
+# anchored on the certificate — stable across rebuilds. An ad-hoc signature's
+# DR is the binary's cdhash, which changes on every build, so Keychain-stored
+# credentials would prompt for authorization each time. Ad-hoc remains the
+# fallback for machines with no signing identity.
+sign_app() {
+  local dir="$1"
+  local identity="${SIGN_IDENTITY:-}"
+
+  if [ -z "$identity" ]; then
+    identity="$(security find-identity -v -p codesigning 2>/dev/null \
+                | sed -n 's/^ *[0-9]*) [A-F0-9]* "\(.*\)"$/\1/p' | head -1)"
+  fi
+
+  if [ -n "$identity" ]; then
+    echo "==> codesign: ${identity}"
+    if codesign --force --sign "$identity" --timestamp=none "$dir" >/dev/null 2>&1; then
+      return 0
+    fi
+    echo "   signing failed, falling back to ad-hoc"
+  fi
+  echo "==> codesign (ad-hoc — Keychain-stored credentials will prompt on every rebuild)"
+  codesign --force --sign - --timestamp=none "$dir" >/dev/null 2>&1 || \
+    echo "   (signing skipped)"
+}
+
 # ---------------------------------------------------------------- build -----
 
 build() {
@@ -115,9 +144,8 @@ PLIST
 
   # Ad-hoc sign: a stable signature keeps Gatekeeper from re-prompting when only
   # the binary changes, and the signature must cover Resources/AppIcon.icns.
-  echo "==> codesign (ad-hoc)"
-  codesign --force --sign - --timestamp=none "${APP_DIR}" >/dev/null 2>&1 || \
-    echo "   (ad-hoc signing skipped)"
+  echo "==> codesign"
+  sign_app "${APP_DIR}"
 
   # Re-register so LaunchServices picks up the document type and the new icon
   # (`open -a Signloader.app foo.ipa` needs this to reach the app).

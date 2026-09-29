@@ -229,7 +229,7 @@ final class AppModel {
         if let cert = kit.certificate {
             log("证书：\(cert.commonName) · \(cert.expiryLabel)", cert.isValid ? .success : .warning)
         } else if kit.certificateURL != nil {
-            log("找到 p12 但没解析出证书：密码可能没填或不对（设置里填一次，会存到 ~/.signloader/credentials）。", .warning)
+            log("找到 p12 但没解析出证书：密码可能没填或不对（设置里填一次，存 Keychain）。", .warning)
         } else {
             log("未找到 p12 证书，请在设置里指定工具包目录。", .warning)
         }
