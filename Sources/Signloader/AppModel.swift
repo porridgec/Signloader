@@ -56,8 +56,25 @@ final class AppModel {
 
     var kitPath: String { didSet { UserDefaults.standard.set(kitPath, forKey: Self.kitKey) } }
     var outputDirectory: String { didSet { UserDefaults.standard.set(outputDirectory, forKey: Self.outKey) } }
+    private var storedPassword = ""
+
+    /// The password as edited in Settings. Assigning **persists** it, so only a
+    /// real user edit may assign here — startup populates the field through
+    /// `adoptStoredPassword(_:)` instead. Assigning at startup used to rewrite
+    /// the Keychain item on every launch, re-pinning its ACL to the current
+    /// (freshly rebuilt, ad-hoc signed) binary and forcing an authorization
+    /// prompt on the next build.
     var password: String {
-        didSet { PasswordStore.shared.set(password) }
+        get { storedPassword }
+        set {
+            storedPassword = newValue
+            PasswordStore.shared.set(newValue)
+        }
+    }
+
+    /// Populate the password field from the store without persisting it back.
+    func adoptStoredPassword(_ value: String) {
+        storedPassword = value
     }
     var passwordIsFromEnvironment: Bool { PasswordStore.shared.isManagedByEnvironment }
     var options: SigningOptions {
@@ -99,7 +116,7 @@ final class AppModel {
         outputDirectory = defaults.string(forKey: Self.outKey) ?? Self.expanded(Self.defaultOutputDirectory)
         // Deliberately not touching PasswordStore here: its first Keychain read
         // must happen off-main (see PasswordStore).
-        password = ""
+        storedPassword = ""
         if let data = defaults.data(forKey: Self.optsKey),
            let decoded = try? JSONDecoder().decode(SigningOptions.self, from: data) {
             options = decoded
@@ -196,11 +213,12 @@ final class AppModel {
         // The kit loader parses the certificate, so the password has to be in
         // hand first. This is also the only place it is pulled into the UI.
         // Off-main: a Keychain read that needs an ACL prompt must never sit on
-        // the thread that is building the window.
+        // the thread that is building the window. Populated via
+        // `adoptStoredPassword` so it does not write back.
         if PasswordStore.shared.isManagedByEnvironment {
-            password = PasswordStore.shared.password
+            adoptStoredPassword(PasswordStore.shared.password)
         } else {
-            password = await PasswordStore.currentAsync()
+            adoptStoredPassword(await PasswordStore.currentAsync())
         }
 
         let root = resolvedKitURL

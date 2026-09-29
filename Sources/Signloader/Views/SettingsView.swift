@@ -4,6 +4,10 @@ struct SettingsView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
 
+    /// Edited locally and saved explicitly: binding the field straight to
+    /// `model.password` would hit the Keychain on every keystroke.
+    @State private var passwordDraft = ""
+
     var body: some View {
         @Bindable var model = model
         return VStack(spacing: 0) {
@@ -46,10 +50,14 @@ struct SettingsView: View {
                                 .font(.system(size: 10))
                                 .foregroundStyle(.secondary)
                         } else {
-                            SecureField("密码", text: $model.password)
+                            SecureField("密码", text: $passwordDraft)
                                 .textFieldStyle(.roundedBorder)
                                 .controlSize(.small)
-                                .frame(width: 180)
+                                .frame(width: 150)
+                                .onSubmit(savePassword)
+                            Button("保存", action: savePassword)
+                                .controlSize(.small)
+                                .disabled(passwordDraft == model.password)
                         }
                     }
                     Text("密码只存本机 Keychain，不落盘、不进仓库。命令行可用 \(PasswordStore.environmentVariable) 环境变量覆盖。")
@@ -101,13 +109,22 @@ struct SettingsView: View {
             Divider()
             HStack {
                 Spacer()
-                Button("完成") { dismiss() }
+                Button("完成") {
+                    savePassword()
+                    dismiss()
+                }
                     .keyboardShortcut(.defaultAction)
             }
             .padding(.horizontal, 18)
             .padding(.vertical, 12)
         }
         .frame(width: 560, height: 560)
+        .onAppear { passwordDraft = model.password }
+    }
+
+    private func savePassword() {
+        guard passwordDraft != model.password else { return }
+        model.password = passwordDraft
     }
 
     private func pathRow(

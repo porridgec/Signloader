@@ -77,7 +77,15 @@ Signloader verify signed.ipa -m <app-identifier>
 ## 安全说明
 
 - **密码只存 Keychain**（`kSecAttrAccessibleWhenUnlockedThisDeviceOnly`），不写 UserDefaults、不进仓库。命令行用 `SIGNLOADER_P12_PASSWORD` 覆盖。
-- Keychain 只在后台线程读：如果条目的 ACL 不认当前二进制（ad-hoc 重签后常见），macOS 会弹一次授权框——绝不能让这个弹框卡在正在构建窗口的主线程上。若想彻底免弹框，可以自己建条目时用 `security add-generic-password … -A`（代价是本机任意进程可读，自行权衡）。
+- **启动只读不写**。早期版本每次启动都会把密码写回 Keychain，条目的 ACL 因此被重新钉在「当次构建的二进制」上——app 是 ad-hoc 签名，重签后 cdhash 变了，下一次启动就弹授权框。这是"每次构建都要授权"的根因。
+- 修改密码时的 `SecItemUpdate` 是原地更新，不碰 ACL。
+- Keychain 只在后台线程读：万一遇到需要授权的条目，弹框也不会卡在正在构建窗口的主线程上。
+- **想彻底免弹框**（代价：本机任意进程可读，等价于 0600 文件），一次性执行：
+  ```bash
+  security delete-generic-password -a default -s app.signloader.p12-password 2>/dev/null
+  security add-generic-password -a default -s app.signloader.p12-password -w '<密码>' -A
+  ```
+  程序内无法创建等价的「信任所有应用」条目（`SecAccessCreate` 传空列表实测不生效，且已弃用），所以只能用 `security -A`。
 - **日志与错误信息里的密码会脱敏**成 `••••••`。
 - 签名过程不发起任何网络请求。
 - ⚠️ 已知限制：`zsign` 只接受命令行传密码，签名运行的几秒内本机 `ps` 能看到该参数。这是 zsign 的接口限制；介意的话在无其他用户的环境下使用。

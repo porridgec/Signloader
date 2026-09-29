@@ -31,16 +31,19 @@ enum Keychain {
     static func write(_ value: String) {
         let data = Data(value.utf8)
         let attributes: [String: Any] = [kSecValueData as String: data]
+        // A plain in-place update keeps the item's existing ACL. If the item was
+        // created with `security add-generic-password -A` (any app may access),
+        // saving from here preserves that; see README for why you'd want to.
         if SecItemUpdate(baseQuery as CFDictionary, attributes as CFDictionary) == errSecSuccess {
             return
         }
-        // Update fails when the existing item's ACL doesn't cover this binary —
-        // which is the normal state after an ad-hoc re-sign. Replace the item
-        // outright so the current binary becomes trusted again.
+        // Only when the item is missing or its ACL doesn't cover this binary do
+        // we replace it. Note the recreated item trusts just this binary — with
+        // an ad-hoc signature that means a prompt after the next rebuild; the
+        // `-A` seed in the README avoids that entirely.
         SecItemDelete(baseQuery as CFDictionary)
         var add = baseQuery
         add[kSecValueData as String] = data
-        // Never synced to iCloud, not readable from the lock screen.
         add[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
         SecItemAdd(add as CFDictionary, nil)
     }
