@@ -312,10 +312,18 @@ final class AppModel {
             let found = try await DeviceService.shared.listDevices()
             devices = found
             if found.isEmpty {
-                log("没有检测到已配对的 iOS 设备（USB 连接即可）。", .warning)
+                log("没有检测到 iOS 设备。USB 直连，或 Wi-Fi 设备（需先用 USB 配对过）都可以。", .warning)
                 selectedDevice = nil
             } else {
-                log("检测到 \(found.count) 台设备：\(found.map(\.displayName).joined(separator: ", "))", .success)
+                let perTransport = Dictionary(grouping: found, by: \.transport)
+                    .mapValues { $0.count }
+                let summary = Device.Transport.allCases
+                    .compactMap { transport -> String? in
+                        guard let n = perTransport[transport], n > 0 else { return nil }
+                        return "\(transport.label) \(n)"
+                    }
+                    .joined(separator: "，")
+                log("检测到 \(found.count) 台设备：\(found.map(\.displayName).joined(separator: ", "))（\(summary)）", .success)
                 if let current = selectedDevice, let keep = found.first(where: { $0.udid == current.udid }) {
                     selectedDevice = keep
                 } else {
@@ -334,7 +342,7 @@ final class AppModel {
         busy = .scanningApps
         defer { busy = .idle }
         do {
-            installedApps = try await DeviceService.shared.installedApps(udid: device.udid)
+            installedApps = try await DeviceService.shared.installedApps(udid: device.udid, transport: device.transport)
             log("\(device.displayName) 上有 \(installedApps.count) 个用户 App", .info)
             if let id = ipa?.bundleID {
                 let match = installedApps.first { $0.bundleID == id }
@@ -425,9 +433,9 @@ final class AppModel {
             Task { @MainActor in for line in lines { self?.log(line) } }
         }
         do {
-            try await DeviceService.shared.install(udid: device.udid, ipa: outputURL, onLine: sink)
+            try await DeviceService.shared.install(udid: device.udid, transport: device.transport, ipa: outputURL, onLine: sink)
             log("安装成功 ✅", .success)
-            installedApps = try await DeviceService.shared.installedApps(udid: device.udid)
+            installedApps = try await DeviceService.shared.installedApps(udid: device.udid, transport: device.transport)
         } catch {
             let text = error.localizedDescription
             log("安装失败：\(text)", .error)
@@ -446,9 +454,9 @@ final class AppModel {
             Task { @MainActor in for line in lines { self?.log(line) } }
         }
         do {
-            try await DeviceService.shared.uninstall(udid: device.udid, bundleID: id, onLine: sink)
+            try await DeviceService.shared.uninstall(udid: device.udid, transport: device.transport, bundleID: id, onLine: sink)
             log("已卸载 \(id)", .success)
-            installedApps = try await DeviceService.shared.installedApps(udid: device.udid)
+            installedApps = try await DeviceService.shared.installedApps(udid: device.udid, transport: device.transport)
         } catch {
             log("卸载失败：\(error.localizedDescription)", .error)
         }
@@ -459,11 +467,11 @@ final class AppModel {
         busy = .uninstalling
         defer { busy = .idle }
         do {
-            try await DeviceService.shared.uninstall(udid: device.udid, bundleID: app.bundleID) { lines in
+            try await DeviceService.shared.uninstall(udid: device.udid, transport: device.transport, bundleID: app.bundleID) { lines in
                 Task { @MainActor in for line in lines { self.log(line) } }
             }
             log("已卸载 \(app.name)", .success)
-            installedApps = try await DeviceService.shared.installedApps(udid: device.udid)
+            installedApps = try await DeviceService.shared.installedApps(udid: device.udid, transport: device.transport)
         } catch {
             log("卸载失败：\(error.localizedDescription)", .error)
         }
@@ -479,7 +487,7 @@ final class AppModel {
             Task { @MainActor in for line in lines { self?.log(line) } }
         }
         do {
-            try await DeviceService.shared.exportProfiles(udid: device.udid, to: target, onLine: sink)
+            try await DeviceService.shared.exportProfiles(udid: device.udid, transport: device.transport, to: target, onLine: sink)
             log("导出完成，重新扫描工具包…", .success)
             kit = await SigningKitLoader.load(root: resolvedKitURL)
             reselectProfile(automatic: true)

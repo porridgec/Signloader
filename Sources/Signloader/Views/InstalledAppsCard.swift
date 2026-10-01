@@ -23,7 +23,7 @@ struct InstalledAppsCard: View {
         ) {
             if model.selectedDevice == nil {
                 SectionHint(
-                    text: "USB 连上 iPhone 后这里会列出已安装的 App，用来判断是否需要先卸载。",
+                    text: "USB 直连或 Wi-Fi 的 iPhone 连上后，这里会列出已安装的 App，用来判断是否需要先卸载。Wi-Fi 设备需先用 USB 配对过一次。",
                     systemImage: "cable.connector",
                     color: .secondary
                 )

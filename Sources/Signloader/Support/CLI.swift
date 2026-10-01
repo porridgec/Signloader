@@ -222,17 +222,20 @@ enum CLI {
         let devices = try await DeviceService.shared.listDevices()
         if json {
             let payload = devices.map {
-                ["udid": $0.udid, "name": $0.displayName, "productType": $0.productType, "version": $0.productVersion] as [String: Any]
+                [
+                    "udid": $0.udid, "name": $0.displayName, "productType": $0.productType,
+                    "version": $0.productVersion, "transport": $0.transport.rawValue,
+                ] as [String: Any]
             }
             print(String(data: try JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys]), encoding: .utf8) ?? "[]")
             return
         }
         if devices.isEmpty {
-            print("没有已配对的 iOS 设备。")
+            print("没有检测到 iOS 设备。USB 直连，或 Wi-Fi 设备（需先用 USB 配对过）都可以。")
             return
         }
         for device in devices {
-            print("\(device.displayName)  \(device.productType) iOS \(device.productVersion)")
+            print("\(device.displayName)  \(device.productType) iOS \(device.productVersion)  [\(device.transport.label)]")
             print("    \(device.udid)")
         }
     }
@@ -379,23 +382,29 @@ enum CLI {
         print("一致     \(outcome.verification.matchesProfile ? "是" : "否")")
 
         if let install = options.install {
-            let udid: String
+            let known = (try? await DeviceService.shared.listDevices()) ?? []
+            let target: Device
             if install == "auto" {
-                guard let first = try await DeviceService.shared.listDevices().first else {
+                // listDevices puts USB first — auto prefers it for large transfers.
+                guard let first = known.first else {
                     throw CLIError.usage("没有已连接的设备")
                 }
-                udid = first.udid
-                print("设备     \(first.displayName) (\(udid))")
+                target = first
+            } else if let match = known.first(where: { $0.udid == install }) {
+                target = match
             } else {
-                udid = install
+                // Explicit UDID we haven't discovered; assume USB.
+                target = Device(udid: install, name: "", productName: "", productType: "",
+                                productVersion: "", transport: .usb)
             }
+            print("设备     \(target.displayName) (\(target.udid)) · \(target.transport.label)")
             if options.uninstallFirst {
-                try await DeviceService.shared.uninstall(udid: udid, bundleID: info.bundleID) { print($0) }
+                try await DeviceService.shared.uninstall(udid: target.udid, transport: target.transport, bundleID: info.bundleID) { print($0) }
             }
-            try await DeviceService.shared.install(udid: udid, ipa: output) { lines in
+            try await DeviceService.shared.install(udid: target.udid, transport: target.transport, ipa: output) { lines in
                 for line in lines { print(line) }
             }
-            print("安装成功 \(info.displayName) → \(udid)")
+            print("安装成功 \(info.displayName) → \(target.udid)")
         }
     }
 }

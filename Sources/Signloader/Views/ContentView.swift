@@ -130,9 +130,10 @@ struct ContentView: View {
 
     private var devicePicker: some View {
         HStack(spacing: 6) {
-            Image(systemName: "iphone")
+            Image(systemName: selectedTransportSymbol)
                 .font(.system(size: 11))
-                .foregroundStyle(model.selectedDevice == nil ? .secondary : Palette.success)
+                .foregroundStyle(model.selectedDevice == nil ? .secondary : transportColor)
+                .help(selectedTransportHint)
             Picker("", selection: Binding(
                 get: { model.selectedDevice?.udid ?? "" },
                 set: { udid in
@@ -142,7 +143,7 @@ struct ContentView: View {
             )) {
                 Text("无设备").tag("")
                 ForEach(model.devices) { device in
-                    Text("\(device.displayName) · \(device.productVersion)").tag(device.udid)
+                    Text("\(device.displayName) · \(device.transport.label)").tag(device.udid)
                 }
             }
             .labelsHidden()
@@ -155,8 +156,24 @@ struct ContentView: View {
                     .font(.system(size: 10))
             }
             .buttonStyle(.borderless)
-            .help("刷新设备列表")
+            .help("刷新设备列表（USB + Wi-Fi）")
             .disabled(model.isBusy)
+        }
+    }
+
+    private var selectedTransportSymbol: String {
+        model.selectedDevice?.transport.symbol ?? "iphone"
+    }
+
+    private var transportColor: Color {
+        model.selectedDevice?.transport == .network ? Palette.warning : Palette.success
+    }
+
+    private var selectedTransportHint: String {
+        switch model.selectedDevice?.transport {
+        case .network: return "Wi-Fi 连接：无需线缆，但传输大 IPA 明显慢于 USB"
+        case .usb: return "USB 连接"
+        case nil: return "未选择设备"
         }
     }
 

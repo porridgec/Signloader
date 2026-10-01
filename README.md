@@ -55,7 +55,7 @@ Signloader 面向一个目录结构，默认 `~/.signloader/kit`（可在设置�
    - **设备** — 全部已注册 UDID，可搜索、可复制；正在连接的设备会标「已连接」。
    - **Entitlements** — 完整键值列表。
 3. **签名**（`S`）。默认直接 `zsign`；超过 500 MB 自动建议「大 App 安全模式」。
-4. **安装**（`I`）。USB 连上设备即可，标题栏选设备。
+4. **安装**（`I`）。USB 直连或 Wi-Fi 都可以，标题栏选设备（两者同时在线时优先 USB——大 IPA 走 Wi-Fi 明显慢）。Wi-Fi 设备需先用 USB 配对过一次才会被发现。
 5. 右侧日志实时输出 `zsign` / `ideviceinstaller` 的完整输出；签完给出校验：有没有 `_CodeSignature`、有没有内嵌 profile、内嵌的 `application-identifier` 是否与所选 profile 一致（这决定能不能覆盖安装）。
 
 ### 快捷键
@@ -69,7 +69,8 @@ Signloader 面向一个目录结构，默认 `~/.signloader/kit`（可在设置�
 ```bash
 Signloader profiles                     # 列出工具包里的 profile
 Signloader profiles -v -m <子串>         # 展开单个 profile 的设备/证书/entitlements
-Signloader devices                      # 列出已连接设备
+Signloader devices                      # 列出已连接设备（USB 和 Wi-Fi）
+Signloader devices --json               # 含 transport 字段（usb/network）
 Signloader info game.ipa [--json]       # 解析 IPA
 Signloader sign game.ipa                # 签名（自动选 profile）
 Signloader sign game.ipa --wildcard -o out.ipa
@@ -140,7 +141,7 @@ Sources/Signloader/
 │   ├── SigningKitService.swift # 扫描工具包、解析 profile 与证书
 │   ├── IPAParser.swift         # 不解包读 zip + 产物校验
 │   ├── Signer.swift            # 两条签名流水线
-│   └── DeviceService.swift     # idevice_* 封装
+│   └── DeviceService.swift     # idevice_* 封装（USB + Wi-Fi 设备）
 └── Views/                      # SwiftUI 界面
 Tools/                          # 图标生成 + 几何自检
 ```

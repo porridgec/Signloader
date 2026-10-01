@@ -1,18 +1,36 @@
 import Foundation
 
 struct Device: Identifiable, Hashable, Sendable {
+    /// How the device is reachable. Commands differ per transport: libimobiledevice
+    /// tools need an explicit `-n` for network devices, otherwise they only look
+    /// at USB.
+    enum Transport: String, Hashable, Sendable, CaseIterable {
+        case usb
+        case network
+
+        var label: String { self == .network ? "Wi-Fi" : "USB" }
+
+        var symbol: String { self == .network ? "wifi" : "cable.connector" }
+
+        /// libimobiledevice's `-n` flag, applied to every per-device invocation.
+        var arguments: [String] { self == .network ? ["-n"] : [] }
+    }
+
     let udid: String
     let name: String
     let productName: String
     let productType: String
     let productVersion: String
+    let transport: Transport
 
     var id: String { udid }
 
     var displayName: String { name.isEmpty ? productType : name }
 
     var subtitle: String {
-        [productName, productVersion].filter { !$0.isEmpty }.joined(separator: " · ")
+        [productName, productVersion, transport.label]
+            .filter { !$0.isEmpty }
+            .joined(separator: " · ")
     }
 
     var shortUDID: String {
