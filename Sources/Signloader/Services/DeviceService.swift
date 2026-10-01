@@ -69,11 +69,11 @@ struct DeviceService: Sendable {
                 try? await Task.sleep(nanoseconds: 400_000_000)
             }
         }
-        // Keep the UDID visible even when the query fails, so the transport
-        // the list reported is still actionable.
+        // Discovered but unreachable (asleep / out of range / handshake lost).
+        // Kept visible so the transport is actionable, and flagged as such.
         return Device(
             udid: udid, name: "", productName: "", productType: "",
-            productVersion: "", transport: transport
+            productVersion: "", transport: transport, reachable: false
         )
     }
 
@@ -93,7 +93,8 @@ struct DeviceService: Sendable {
             productName: dict["ProductName"] as? String ?? "",
             productType: dict["ProductType"] as? String ?? "",
             productVersion: dict["ProductVersion"] as? String ?? "",
-            transport: transport
+            transport: transport,
+            reachable: true
         )
     }
 

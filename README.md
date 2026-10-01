@@ -56,6 +56,8 @@ Signloader 面向一个目录结构，默认 `~/.signloader/kit`（可在设置�
    - **Entitlements** — 完整键值列表。
 3. **签名**（`S`）。默认直接 `zsign`；超过 500 MB 自动建议「大 App 安全模式」。
 4. **安装**（`I`）。USB 直连或 Wi-Fi 都可以，标题栏选设备（两者同时在线时优先 USB——大 IPA 走 Wi-Fi 明显慢）。Wi-Fi 设备需先用 USB 配对过一次才会被发现。
+
+   设备指示器是按**真实连接状态**着色的：绿 = 最近一次扫描时设备有应答，灰 = 发现了但不可达（设备休眠/不在同一网段，Wi-Fi 下常见）。形状区分传输方式（Wi-Fi 波形 / USB 线缆）。刷新按钮会重新探测。
 5. 右侧日志实时输出 `zsign` / `ideviceinstaller` 的完整输出；签完给出校验：有没有 `_CodeSignature`、有没有内嵌 profile、内嵌的 `application-identifier` 是否与所选 profile 一致（这决定能不能覆盖安装）。
 
 ### 快捷键

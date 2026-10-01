@@ -130,9 +130,11 @@ struct ContentView: View {
 
     private var devicePicker: some View {
         HStack(spacing: 6) {
+            // Colour carries reachability (green = answered at scan time,
+            // grey = discovered but unreachable); shape carries the transport.
             Image(systemName: selectedTransportSymbol)
                 .font(.system(size: 11))
-                .foregroundStyle(model.selectedDevice == nil ? .secondary : transportColor)
+                .foregroundStyle(transportIndicatorColor)
                 .help(selectedTransportHint)
             Picker("", selection: Binding(
                 get: { model.selectedDevice?.udid ?? "" },
@@ -143,7 +145,7 @@ struct ContentView: View {
             )) {
                 Text("无设备").tag("")
                 ForEach(model.devices) { device in
-                    Text("\(device.displayName) · \(device.transport.label)").tag(device.udid)
+                    Text(rowLabel(for: device)).tag(device.udid)
                 }
             }
             .labelsHidden()
@@ -162,19 +164,38 @@ struct ContentView: View {
     }
 
     private var selectedTransportSymbol: String {
-        model.selectedDevice?.transport.symbol ?? "iphone"
+        switch model.selectedDevice {
+        case .none: return "iphone"
+        case .some(let device):
+            if !device.reachable { return "exclamationmark.wifi" }
+            return device.transport.symbol
+        }
     }
 
-    private var transportColor: Color {
-        model.selectedDevice?.transport == .network ? Palette.warning : Palette.success
+    /// Green = the device answered us at scan time; grey = discovered but not
+    /// reachable. Never amber — that would read as a warning, and reachability
+    /// is binary here, not degraded.
+    private var transportIndicatorColor: Color {
+        guard let device = model.selectedDevice else { return Palette.subtle }
+        return device.reachable ? Palette.success : Palette.subtle
     }
 
     private var selectedTransportHint: String {
-        switch model.selectedDevice?.transport {
-        case .network: return "Wi-Fi 连接：无需线缆，但传输大 IPA 明显慢于 USB"
-        case .usb: return "USB 连接"
-        case nil: return "未选择设备"
+        switch model.selectedDevice {
+        case .none:
+            return "未选择设备"
+        case .some(let device):
+            let transport = device.transport == .network
+                ? "Wi-Fi 连接：无需线缆，但传输大 IPA 明显慢于 USB"
+                : "USB 连接"
+            return device.reachable ? transport : "\(transport) · 最近一次扫描时不可达"
         }
+    }
+
+    private func rowLabel(for device: Device) -> String {
+        device.reachable
+            ? "\(device.displayName) · \(device.transport.label)"
+            : "\(device.displayName) · \(device.transport.label)（不可达）"
     }
 
     // MARK: Left column

@@ -393,9 +393,10 @@ enum CLI {
             } else if let match = known.first(where: { $0.udid == install }) {
                 target = match
             } else {
-                // Explicit UDID we haven't discovered; assume USB.
+                // Explicit UDID we haven't discovered; assume reachable since
+                // the user is about to use it.
                 target = Device(udid: install, name: "", productName: "", productType: "",
-                                productVersion: "", transport: .usb)
+                                productVersion: "", transport: .usb, reachable: true)
             }
             print("设备     \(target.displayName) (\(target.udid)) · \(target.transport.label)")
             if options.uninstallFirst {

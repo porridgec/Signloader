@@ -23,6 +23,14 @@ struct Device: Identifiable, Hashable, Sendable {
     let productVersion: String
     let transport: Transport
 
+    /// True when the device answered an `ideviceinfo` query at scan time.
+    ///
+    /// Wi-Fi devices in particular show up in `idevice_id -n` while asleep or
+    /// out of range — discoverable, but not actually reachable. The UI uses this
+    /// to colour the transport indicator honestly instead of always showing
+    /// "connected".
+    let reachable: Bool
+
     var id: String { udid }
 
     var displayName: String { name.isEmpty ? productType : name }
