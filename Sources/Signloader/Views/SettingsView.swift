@@ -23,7 +23,7 @@ struct SettingsView: View {
                     pathRow(
                         title: "目录",
                         path: $model.kitPath,
-                        placeholder: AppModel.defaultKitPath
+                        placeholder: SignloaderPaths.defaultKitPath
                     ) {
                         Task { await model.loadKit() }
                     }
@@ -74,7 +74,7 @@ struct SettingsView: View {
                     pathRow(
                         title: "输出目录",
                         path: $model.outputDirectory,
-                        placeholder: AppModel.defaultOutputDirectory
+                        placeholder: SignloaderPaths.defaultOutputDirectory
                     ) {}
                 }
 

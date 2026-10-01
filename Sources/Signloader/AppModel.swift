@@ -83,8 +83,7 @@ final class AppModel {
     private static let outKey = "outputDirectory"
     private static let optsKey = "signingOptions"
 
-    nonisolated static let defaultKitPath = "~/.signloader/kit"
-    nonisolated static let defaultOutputDirectory = "~/Desktop/Signed"
+
 
     // MARK: State
 
@@ -110,8 +109,8 @@ final class AppModel {
 
     init() {
         let defaults = UserDefaults.standard
-        kitPath = defaults.string(forKey: Self.kitKey) ?? Self.expanded(Self.defaultKitPath)
-        outputDirectory = defaults.string(forKey: Self.outKey) ?? Self.expanded(Self.defaultOutputDirectory)
+        kitPath = defaults.string(forKey: Self.kitKey) ?? SignloaderPaths.expanded(SignloaderPaths.defaultKitPath)
+        outputDirectory = defaults.string(forKey: Self.outKey) ?? SignloaderPaths.expanded(SignloaderPaths.defaultOutputDirectory)
         // Deliberately not touching PasswordStore here: its first credential
         // read must happen off-main (see PasswordStore).
         storedPassword = ""
@@ -125,9 +124,7 @@ final class AppModel {
         }
     }
 
-    nonisolated static func expanded(_ path: String) -> String {
-        (path as NSString).expandingTildeInPath
-    }
+
 
     // MARK: Derived
 
@@ -139,10 +136,7 @@ final class AppModel {
 
     var hasCertificate: Bool { kit.certificateURL != nil }
 
-    var missingTools: [String] {
-        ["zsign", "idevice_id", "ideviceinstaller", "unzip", "ditto", "security", "openssl"]
-            .filter { Shell.locate($0) == nil }
-    }
+    var missingTools: [String] { Toolchain.missing() }
 
     var filteredProfiles: [ProvisionProfile] {
         let query = profileFilter.trimmingCharacters(in: .whitespaces).lowercased()

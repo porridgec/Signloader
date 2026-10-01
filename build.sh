@@ -165,6 +165,38 @@ PLIST
   echo "==> built ${APP_DIR}"
 }
 
+install_cli() {
+  local src="${APP_DIR}/Contents/MacOS/${APP_NAME}"
+  [ -f "$src" ] || { echo "build first: ./build.sh"; exit 1; }
+
+  # Same binary as the GUI: args dispatch to the CLI front end. The copy must be
+  # RE-SIGNED — the bundle-signed binary gets SIGKILLed when executed outside
+  # its .app (its embedded signature references the bundle context). Re-signing
+  # with the same identity + identifier keeps the designated requirement
+  # identical, so Keychain access carries over to the copy too.
+  local dest=""
+  for d in /usr/local/bin /opt/homebrew/bin "$HOME/.local/bin"; do
+    [ -d "$d" ] && [ -w "$d" ] && { dest="$d"; break; }
+  done
+  if [ -z "$dest" ]; then
+    dest="$HOME/.local/bin"
+    mkdir -p "$dest"
+    echo "   note: $dest is not on PATH — add it to use 'signloader' from anywhere"
+  fi
+  local identity="${SIGN_IDENTITY:-}"
+  if [ -z "$identity" ]; then
+    identity="$(security find-identity -v -p codesigning 2>/dev/null \
+                | sed -n 's/^ *[0-9]*) [A-F0-9]* "\(.*\)"$/\1/p' | head -1)"
+  fi
+  install -m 0755 "$src" "$dest/signloader"
+  if [ -n "$identity" ]; then
+    codesign --force --sign "$identity" --timestamp=none \
+             --identifier "${BUNDLE_ID}" "$dest/signloader" >/dev/null 2>&1 || \
+      echo "   warning: re-sign failed — Keychain may prompt for CLI use"
+  fi
+  echo "   installed $dest/signloader"
+}
+
 # -------------------------------------------------------------- dispatch ----
 
 case "${1:-release}" in
@@ -177,6 +209,8 @@ case "${1:-release}" in
            ditto "$APP_DIR" "$target"
            lsregister="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
            [ -x "$lsregister" ] && "$lsregister" -f "$target" || true
-           echo "   installed ${target}" ;;
+           echo "   installed ${target}"
+           echo "==> cli"
+           install_cli ;;
   *)       build "${1:-release}" ;;
 esac

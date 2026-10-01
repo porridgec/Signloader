@@ -91,6 +91,29 @@ Signloader verify signed.ipa -m <app-identifier>
 
 两条流水线的产物条目列表完全一致。
 
+## 机器接口（给 agent / 脚本用）
+
+GUI 和 CLI 是**同一个二进制**：`build.sh install` 会把带证书签名的二进制同时装到 `/Applications/Signloader.app` 和 PATH 上的 `signloader`。带参数就走 CLI，无参数启动 GUI。
+
+约定：
+
+- `--json` → stdout 输出单个 JSON 文档（含 `command` / `ok` 字段），人类进度走 stderr
+- 退出码：`0` 成功 · `1` 错误 · `2` 校验未通过 · `64` 用法错误
+- **永不交互**：密码用 `SIGNLOADER_P12_PASSWORD`，工具包目录用 `SIGNLOADER_KIT`（不传则读 GUI 里保存的设置）
+
+```bash
+signloader doctor                       # 自检：工具链/工具包/设备
+signloader version
+signloader profiles --json              # 全部描述文件
+signloader profile --json -m <子串>      # 单个 profile 详情（设备/证书/entitlements）
+signloader devices --json               # 已连接设备（USB/Wi-Fi、reachable）
+signloader info <ipa> --json            # 解析 IPA
+signloader sign <ipa> --json -o out.ipa # 签名（stdout 纯 JSON，进度在 stderr）
+signloader verify <ipa> --json -m <app-id>
+```
+
+退出码与 `ok` 字段让 agent 无需解析人类语言；`sign` 的结果里带内嵌 profile 的 `appIdentifier` 与 `matchesProfile`，可直接判断能否覆盖安装。
+
 ## 安全说明
 
 - **密码存 Keychain**（`kSecAttrAccessibleWhenUnlockedThisDeviceOnly`：仅本设备、解锁时可读），不写 UserDefaults、不进仓库。命令行用 `SIGNLOADER_P12_PASSWORD` 覆盖。
