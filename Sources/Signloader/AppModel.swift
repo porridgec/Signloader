@@ -76,7 +76,15 @@ final class AppModel {
     }
     var passwordIsFromEnvironment: Bool { PasswordStore.shared.isManagedByEnvironment }
     var options: SigningOptions {
-        didSet { UserDefaults.standard.set(options, forKey: Self.optsKey) }
+        // SigningOptions is a Swift struct — not a property-list object — so a
+        // direct UserDefaults.set here throws NSInvalidArgumentException from
+        // _CFPrefsValidateValueForKey, and AppKit crashes the app the moment a
+        // TextField in SigningOptionsCard writes back. Persist as JSON Data.
+        didSet {
+            if let data = try? JSONEncoder().encode(options) {
+                UserDefaults.standard.set(data, forKey: Self.optsKey)
+            }
+        }
     }
 
     private static let kitKey = "kitPath"
