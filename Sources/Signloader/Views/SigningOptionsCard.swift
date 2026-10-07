@@ -91,7 +91,8 @@ struct SigningOptionsCard: View {
                 .toggleStyle(.checkbox)
                 .disabled(!model.options.installAfterSigning || model.selectedDevice == nil)
 
-                if model.bundleIDDraft.isEmpty {
+                // 只有「真的改成了别的值」才算改了 bundle id；预填的原值不算
+                if model.bundleIDDraft.isEmpty || model.bundleIDDraft == ipa.bundleID {
                     SectionHint(
                         text: "想覆盖安装就保持 bundle id 不变，并选带团队后缀的 profile；改了 bundle id 就得先卸载，应用数据也会丢。",
                         systemImage: "lightbulb",
