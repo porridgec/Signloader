@@ -144,6 +144,32 @@ final class AppModel {
 
     var hasCertificate: Bool { kit.certificateURL != nil }
 
+    var bundleIDDraft = ""
+    var appNameDraft = ""
+    /// 首次聚焦才预填原值；换 IPA 后重置。
+    private var bundleIDDraftInitialized = false
+    private var appNameDraftInitialized = false
+
+    /// 首次激活输入框时，用当前 IPA 的原值预填（用户要求的行为）。
+    func prefillBundleIDDraft() {
+        guard !bundleIDDraftInitialized, let ipa else { return }
+        bundleIDDraft = ipa.bundleID
+        bundleIDDraftInitialized = true
+    }
+
+    func prefillAppNameDraft() {
+        guard !appNameDraftInitialized, let ipa else { return }
+        appNameDraft = ipa.displayName
+        appNameDraftInitialized = true
+    }
+
+    /// 有效覆盖值 = 输入框草稿。草稿是**按 IPA** 的临时状态（换 IPA 即清空），
+    /// 不进持久化——否则上一个 App 的 bundle id 会静默套到下一个 App 上。
+    private func applyDraftOverrides() {
+        options.overrideBundleID = bundleIDDraft
+        options.overrideAppName = appNameDraft
+    }
+
     var missingTools: [String] { Toolchain.missing() }
 
     var filteredProfiles: [ProvisionProfile] {
@@ -252,6 +278,11 @@ final class AppModel {
         do {
             let info = try await IPAParser.parse(url: url)
             ipa = info
+            // 草稿按 IPA 归零：上一个 App 的覆盖值绝不能带过来
+            bundleIDDraft = ""
+            appNameDraft = ""
+            bundleIDDraftInitialized = false
+            appNameDraftInitialized = false
             log("载入 \(url.lastPathComponent) · \(ByteFormat.string(info.fileSize))", .success)
             log("App: \(info.displayName) \(info.versionLabel)", .info)
             log("Bundle ID: \(info.bundleID)", .info)
@@ -368,6 +399,9 @@ final class AppModel {
         busy = .signing
         lastOutcome = nil
         defer { busy = .idle }
+
+        // 把输入框草稿套进签名参数（草稿按 IPA 生命周期管理）
+        applyDraftOverrides()
 
         let request = SignRequest(
             ipa: ipa.url,

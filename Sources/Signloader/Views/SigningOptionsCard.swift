@@ -4,8 +4,15 @@ struct SigningOptionsCard: View {
     @Environment(AppModel.self) private var model
     let ipa: IPAInfo
 
+    @FocusState private var bundleIDFieldFocused: Bool
+    @FocusState private var appNameFieldFocused: Bool
+
     var body: some View {
-        Card(title: "签名选项", systemImage: "slider.horizontal.3") {
+        // $model 需要局部 @Bindable：手写 Binding(get:set:) 不参与观察追踪，
+        // 用它驱动 sheet/输入框会出现「赋值了但界面不更新」的问题
+        @Bindable var model = model
+
+        return Card(title: "签名选项", systemImage: "slider.horizontal.3") {
             VStack(alignment: .leading, spacing: 9) {
                 Toggle(isOn: binding(\.safeMode)) {
                     VStack(alignment: .leading, spacing: 1) {
@@ -36,14 +43,22 @@ struct SigningOptionsCard: View {
 
                 Divider()
 
-                TextField("改 Bundle ID（留空保持 \(ipa.bundleID)）", text: textBinding(\.overrideBundleID))
+                TextField("改 Bundle ID（清空 = 保持原值）", text: $model.bundleIDDraft)
                     .textFieldStyle(.roundedBorder)
                     .controlSize(.small)
                     .font(.system(size: 11, design: .monospaced))
+                    .focused($bundleIDFieldFocused)
+                    .onChange(of: bundleIDFieldFocused) { _, focused in
+                        if focused { model.prefillBundleIDDraft() }
+                    }
 
-                TextField("改 App 显示名（留空保持 \(ipa.displayName)）", text: textBinding(\.overrideAppName))
+                TextField("改 App 显示名（清空 = 保持原值）", text: $model.appNameDraft)
                     .textFieldStyle(.roundedBorder)
                     .controlSize(.small)
+                    .focused($appNameFieldFocused)
+                    .onChange(of: appNameFieldFocused) { _, focused in
+                        if focused { model.prefillAppNameDraft() }
+                    }
 
                 Toggle(isOn: binding(\.removeAppExtensions)) {
                     Text("移除 App 扩展（PlugIns）").font(.system(size: 11))
@@ -76,7 +91,7 @@ struct SigningOptionsCard: View {
                 .toggleStyle(.checkbox)
                 .disabled(!model.options.installAfterSigning || model.selectedDevice == nil)
 
-                if model.options.overrideBundleID.isEmpty {
+                if model.bundleIDDraft.isEmpty {
                     SectionHint(
                         text: "想覆盖安装就保持 bundle id 不变，并选带团队后缀的 profile；改了 bundle id 就得先卸载，应用数据也会丢。",
                         systemImage: "lightbulb",
@@ -101,10 +116,4 @@ struct SigningOptionsCard: View {
         )
     }
 
-    private func textBinding(_ keyPath: WritableKeyPath<SigningOptions, String>) -> Binding<String> {
-        Binding(
-            get: { model.options[keyPath: keyPath] },
-            set: { model.options[keyPath: keyPath] = $0 }
-        )
-    }
 }
