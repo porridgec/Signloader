@@ -110,10 +110,14 @@ signloader profile --json -m <子串>      # 单个 profile 详情（设备/证�
 signloader devices --json               # 已连接设备（USB/Wi-Fi、reachable）
 signloader info <ipa> --json            # 解析 IPA
 signloader sign <ipa> --json -o out.ipa # 签名（stdout 纯 JSON，进度在 stderr）
+signloader sign <a.ipa> <b.ipa> … --json # 批量队列：逐个签名（+安装），单项失败不中断；
+                                        # stdout 为单个 JSON 数组，退出码 0=全成 1=有失败
 signloader verify <ipa> --json -m <app-id>
 ```
 
 退出码与 `ok` 字段让 agent 无需解析人类语言；`sign` 的结果里带内嵌 profile 的 `appIdentifier` 与 `matchesProfile`，可直接判断能否覆盖安装。
+
+批量注意：`-b/--bundle-id` 和 `-o/--out` 是「按 App」的操作，**只能对单个 IPA 使用**（批量会改写所有 App 的身份 / 互相覆盖），违者返回 64。批量产物写到各源文件同目录（或 `-k` 指定的输出目录），重名自动加 `-2`/`-3` 后缀。
 
 ## 安全说明
 

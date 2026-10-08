@@ -71,6 +71,8 @@ enum CLI {
       Signloader devices                  列出已连接的设备（USB + Wi-Fi）
       Signloader info <app.ipa>           解析 IPA（Info.plist / 图标 / 扩展）
       Signloader sign <app.ipa>           签名，必要时安装
+      Signloader sign <a.ipa> <b.ipa> …   批量：逐个签名（+安装），单项失败不中断；
+                                          --json 时 stdout 为单个 JSON 数组
       Signloader verify <signed.ipa>      校验产物里的签名与 profile
       Signloader doctor                   自检：工具链 / 工具包 / 设备
       Signloader version                  打印版本
@@ -122,14 +124,18 @@ enum CLI {
             case "profiles": try await printProfiles(kit, json: options.json)
             case "profile":  try await printProfileDetail(options, kit: kit)
             case "devices":  try await printDevices(json: options.json)
-            case "info":     try await printInfo(options, operand: operands(of: args), json: options.json)
-            case "sign":     return try await sign(options, operand: operands(of: args), kit: kit)
-            case "verify":   return try await verify(options, operand: operands(of: args))
+            case "info":     try await printInfo(options, operand: operands(of: options).first, json: options.json)
+            case "sign":     return try await sign(options, files: operands(of: options), kit: kit)
+            case "verify":   return try await verify(options, operand: operands(of: options).first)
             case "doctor":   return await doctor(json: options.json)
             default:
                 FileHandle.standardError.write(Data("未知命令: \(args[0])\n\n\(usage)\n".utf8))
                 return 64
             }
+        } catch let error as CLIError where error.isUsage {
+            // 契约：用法错误统一 64（与未知命令一致）
+            FileHandle.standardError.write(Data("用法错误：\(error.localizedDescription)\n".utf8))
+            return 64
         } catch {
             let payload: [String: Any] = ["command": args.first ?? "", "ok": false,
                                           "error": error.localizedDescription]
@@ -143,8 +149,11 @@ enum CLI {
         return 0
     }
 
-    private static func operands(of args: [String]) -> String? {
-        args.dropFirst().first { !$0.hasPrefix("-") }
+    /// Positional operands with the command name stripped. Derived from the
+    /// parsed options — NOT a raw argv scan, which would mistake option values
+    /// (`-o <path>`) for operands.
+    private static func operands(of options: Options) -> [String] {
+        Array(options.positional.dropFirst())
     }
 
     // MARK: - doctor
@@ -411,8 +420,58 @@ enum CLI {
 
     // MARK: sign
 
-    private static func sign(_ options: Options, operand: String?, kit: SigningKit) async throws -> Int {
-        guard let path = operand else { throw CLIError.usage("需要一个 .ipa 路径") }
+    /// 批量入口：一个 IPA = 现有单文件行为；多个 = 顺序处理，单项失败不中断。
+    /// --json 时 stdout 仍是单个 JSON 文档（数组），进度走 stderr。
+    private static func sign(_ options: Options, files: [String], kit: SigningKit) async throws -> Int {
+        guard !files.isEmpty else { throw CLIError.usage("需要一个 .ipa 路径") }
+
+        if files.count == 1 {
+            _ = try await signOne(options, path: files[0], kit: kit, emitJSON: options.json)
+            return 0
+        }
+
+        // 改写 bundle id 是「按 App」的操作，批量套同一个值会静默改掉每个 App 的身份
+        if let b = options.overrideBundleID, !b.isEmpty {
+            throw CLIError.usage("--bundle-id 只能对单个 IPA 使用（批量会改写所有 App 的身份）")
+        }
+        // 同理，-o 只对一个输出路径有意义
+        if options.out != nil {
+            throw CLIError.usage("--out 只能对单个 IPA 使用（批量会互相覆盖）")
+        }
+
+        var results: [[String: Any]] = []
+        var failed = 0
+        for (index, file) in files.enumerated() {
+            if !options.json {
+                print("\n[\(index + 1)/\(files.count)] \((file as NSString).lastPathComponent)")
+            }
+            do {
+                var payload = try await signOne(options, path: file, kit: kit, emitJSON: false)
+                payload["file"] = file
+                results.append(payload)
+            } catch {
+                failed += 1
+                let note = error.localizedDescription.components(separatedBy: "\n").first ?? ""
+                if options.json {
+                    results.append([
+                        "command": "sign", "ok": false,
+                        "file": file, "error": note,
+                    ])
+                } else {
+                    FileHandle.standardError.write(Data("失败     \(note)\n".utf8))
+                }
+            }
+        }
+
+        if options.json {
+            print(jsonString(["command": "sign", "ok": failed == 0, "items": results]))
+        } else {
+            print("\n批量完成：成功 \(files.count - failed) · 失败 \(failed)")
+        }
+        return failed == 0 ? 0 : 1
+    }
+
+    private static func signOne(_ options: Options, path: String, kit: SigningKit, emitJSON: Bool) async throws -> [String: Any] {
         let ipaURL = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
         guard let p12 = kit.certificateURL else { throw CLIError.usage("工具包里没有 p12：\(kit.root.path)") }
 
@@ -491,8 +550,7 @@ enum CLI {
         }
         say("── 完成 ──")
 
-        if options.json {
-            var payload: [String: Any] = [
+        var payload: [String: Any] = [
                 "command": "sign", "ok": true,
                 "source": ipaURL.path,
                 "output": output.path,
@@ -515,12 +573,37 @@ enum CLI {
                 "sizeBefore": outcome.sizeBefore,
                 "sizeAfter": outcome.sizeAfter,
             ]
-            if let install = options.install {
-                payload["installed"] = true
-                payload["device"] = install
-            }
+        payload = [
+            "command": "sign", "ok": true,
+            "source": ipaURL.path,
+            "output": output.path,
+            "mode": outcome.mode,
+            "bundleID": info.bundleID,
+            "appName": info.appName,
+            "profile": [
+                "appIdentifier": profile.appIdentifier,
+                "name": profile.name,
+                "expiration": ISO8601DateFormatter().string(from: profile.expiration),
+            ],
+            "verification": [
+                "codeSignature": outcome.verification.hasCodeSignature,
+                "embeddedProfile": outcome.verification.hasEmbeddedProfile,
+                "profileName": outcome.verification.embeddedProfileName ?? "",
+                "appIdentifier": outcome.verification.embeddedAppIdentifier ?? "",
+                "matchesProfile": outcome.verification.matchesProfile,
+            ] as [String: Any],
+            "durationSeconds": outcome.duration,
+            "sizeBefore": outcome.sizeBefore,
+            "sizeAfter": outcome.sizeAfter,
+        ]
+        if let install = options.install {
+            payload["installed"] = true
+            payload["device"] = install
+        }
+        if emitJSON {
             print(jsonString(payload))
-        } else {
+        } else if !options.json {
+            // 批量 JSON 模式下人类摘要必须留在外面（stdout 只能有最终数组）
             print("用时     \(String(format: "%.2f", outcome.duration))s")
             print("大小     \(ByteFormat.string(outcome.sizeBefore)) → \(ByteFormat.string(outcome.sizeAfter))")
             print("代码签名 \(outcome.verification.hasCodeSignature ? "有" : "无")")
@@ -552,7 +635,7 @@ enum CLI {
             }
             say("安装成功 \(info.displayName) → \(target.udid)")
         }
-        return 0
+        return payload
     }
 
     // MARK: helpers
@@ -567,6 +650,12 @@ enum CLI {
 
 enum CLIError: LocalizedError {
     case usage(String)
+
+    /// Exit-code contract: usage errors map to 64.
+    var isUsage: Bool {
+        if case .usage = self { return true }
+        return false
+    }
 
     var errorDescription: String? {
         switch self {
