@@ -337,6 +337,11 @@ final class AppModel {
 
     // MARK: Devices
 
+    /// 队列卡片的目标设备提示用；设备列表没刷新过时先刷一次。
+    func refreshDevicesForQueueHint() async {
+        if devices.isEmpty { await loadDevices() }
+    }
+
     func loadDevices() async {
         guard !isBusy else { return }
         busy = .scanningDevices
@@ -556,5 +561,170 @@ final class AppModel {
         guard let outputURL else { return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(outputURL.path, forType: .string)
+    }
+
+    // MARK: Queue
+
+    var queue: [QueueItem] = []
+    var queueRunning = false
+    private var queueStopRequested = false
+
+    var queueSummary: String {
+        let counts = Dictionary(grouping: queue, by: \.state).mapValues(\.count)
+        return QueueItem.State.allCases
+            .compactMap { state in
+                guard let n = counts[state], n > 0 else { return nil }
+                return "\(state.rawValue) \(n)"
+            }
+            .joined(separator: " · ")
+    }
+
+    /// 入队（自动过滤非 .ipa）。重复入队允许——产物用 -2/-3 后缀避免覆盖。
+    func addToQueue(_ urls: [URL]) {
+        let items = urls
+            .filter { $0.pathExtension.lowercased() == "ipa" }
+            .map { QueueItem(url: $0) }
+        guard !items.isEmpty else { return }
+        queue.append(contentsOf: items)
+        let names = items.map(\.displayName)
+        log("队列 +\(items.count)，共 \(queue.count) 个：\(names.prefix(3).joined(separator: "、"))\(names.count > 3 ? " 等" : "")", .info)
+    }
+
+    func removeFromQueue(_ id: QueueItem.ID) {
+        // 处理中的项不能在这里移除，先停止队列
+        queue.removeAll { $0.id == id && $0.state != .working }
+    }
+
+    func clearQueue(finishedOnly: Bool) {
+        if finishedOnly {
+            queue.removeAll { $0.state.isFinished }
+        } else {
+            queue.removeAll { $0.state != .working }
+        }
+    }
+
+    /// 当前项结束后停止；未开始的项标记为已取消。
+    func stopQueue() {
+        guard queueRunning else { return }
+        queueStopRequested = true
+        log("队列将在当前项结束后停止", .warning)
+    }
+
+    func runQueue() async {
+        guard !queueRunning, !isBusy else { return }
+        guard queue.contains(where: { !$0.state.isFinished }) else {
+            log("队列里没有待处理项", .warning)
+            return
+        }
+        queueRunning = true
+        queueStopRequested = false
+        defer { queueRunning = false }
+
+        let installing = selectedDevice != nil
+        log(
+            "开始队列：\(queue.filter { !$0.state.isFinished }.count) 项，\(installing ? "签名并安装到 \(selectedDevice!.displayName)" : "仅签名（未选设备）")",
+            .info
+        )
+
+        for index in queue.indices {
+            if queueStopRequested {
+                if queue[index].state == .pending {
+                    queue[index].state = .cancelled
+                    queue[index].note = "用户停止"
+                }
+                continue
+            }
+            guard queue[index].state == .pending else { continue }
+            await processQueueItem(at: index)
+        }
+
+        let ok = queue.filter { $0.state == .done }.count
+        let bad = queue.filter { $0.state == .failed }.count
+        let skipped = queue.filter { $0.state == .cancelled }.count
+        log(
+            "队列结束：成功 \(ok) · 失败 \(bad)\(skipped > 0 ? " · 取消 \(skipped)" : "")",
+            bad == 0 ? .success : .warning
+        )
+    }
+
+    /// 单项流水线：解析 → 自动匹配 profile → 签名 →（有设备则）安装。
+    /// 失败只标记本项，不中断队列。
+    private func processQueueItem(at index: Int) async {
+        let url = queue[index].url
+        queue[index].state = .working
+
+        func note(_ text: String) { queue[index].note = text }
+
+        do {
+            note("解析中")
+            let info = try await IPAParser.parse(url: url)
+            log("「\(info.displayName)」\(info.versionLabel) · \(info.bundleID)", .info)
+
+            guard let profile = kit.suggestedProfile(for: info.bundleID) else {
+                throw QueueError.noProfile(info.bundleID)
+            }
+            guard let p12 = kit.certificateURL else {
+                throw QueueError.noCertificate
+            }
+            note("签名 · \(profile.displayBundleID)")
+
+            // 队列项不继承聚焦 IPA 的草稿（bundle id / 显示名覆盖是按 App 的），
+            // 也不走 options.installAfterSigning——安装由本循环统一处理。
+            var opts = options
+            opts.overrideBundleID = ""
+            opts.overrideAppName = ""
+            opts.installAfterSigning = false
+
+            let output = Signer.defaultOutputURL(
+                for: url, directory: outputDirectoryURL, appName: info.displayName
+            )
+            try? FileManager.default.createDirectory(
+                at: output.deletingLastPathComponent(), withIntermediateDirectories: true
+            )
+            let request = SignRequest(
+                ipa: url, output: output, p12: p12, password: password,
+                profile: profile, appPath: info.appPath, options: opts
+            )
+            let outcome = try await Signer().run(request) { lines in
+                Task { @MainActor in lines.forEach { self.log($0) } }
+            }
+            guard outcome.verification.hasEmbeddedProfile else {
+                throw QueueError.badSignature
+            }
+
+            if let device = selectedDevice {
+                note("安装 → \(device.displayName)")
+                try await DeviceService.shared.install(
+                    udid: device.udid, transport: device.transport, ipa: output
+                ) { lines in
+                    Task { @MainActor in lines.forEach { self.log($0) } }
+                }
+                queue[index].state = .done
+                note("已安装 · \(device.displayName)")
+                log("「\(info.displayName)」安装完成", .success)
+            } else {
+                queue[index].state = .done
+                note("已签名（未选设备）")
+                log("「\(info.displayName)」签名完成：\(output.lastPathComponent)", .success)
+            }
+        } catch {
+            queue[index].state = .failed
+            queue[index].note = error.localizedDescription
+            log("「\(url.lastPathComponent)」失败：\(error.localizedDescription)", .error)
+        }
+    }
+}
+
+enum QueueError: LocalizedError {
+    case noProfile(String)
+    case noCertificate
+    case badSignature
+
+    var errorDescription: String? {
+        switch self {
+        case .noProfile(let bundleID): return "工具包里没有能签 \(bundleID) 的 profile"
+        case .noCertificate: return "工具包里没有 p12 证书"
+        case .badSignature: return "签出来的产物没有内嵌 profile，已跳过安装"
+        }
     }
 }

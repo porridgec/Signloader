@@ -6,6 +6,7 @@ struct ContentView: View {
     @State private var showSettings = false
     @State private var isDropTargeted = false
     @State private var showIPAFileImporter = false
+    @State private var showBatchImporter = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -22,8 +23,15 @@ struct ContentView: View {
         }
         .background(Color(nsColor: .windowBackgroundColor))
         .dropDestination(for: URL.self) { urls, _ in
-            guard let url = urls.first(where: { $0.pathExtension.lowercased() == "ipa" }) else { return false }
-            Task { await model.loadIPA(url) }
+            let ipas = urls.filter { $0.pathExtension.lowercased() == "ipa" }
+            guard !ipas.isEmpty else { return false }
+            if ipas.count == 1 {
+                Task { await model.loadIPA(ipas[0]) }
+            } else {
+                // 批量拖入 → 队列；第一个同时载入详情便于查看
+                model.addToQueue(ipas)
+                Task { await model.loadIPA(ipas[0]) }
+            }
             return true
         } isTargeted: { isDropTargeted = $0 }
         .overlay {
@@ -53,6 +61,18 @@ struct ContentView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .signloaderPickIPA)) { _ in
             showIPAFileImporter = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .signloaderBatchPickIPA)) { _ in
+            showBatchImporter = true
+        }
+        .fileImporter(
+            isPresented: $showBatchImporter,
+            allowedContentTypes: [UTType(filenameExtension: "ipa") ?? .data],
+            allowsMultipleSelection: true
+        ) { result in
+            if case .success(let urls) = result {
+                model.addToQueue(urls)
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .signloaderLoadIPA)) { note in
             guard let url = note.object as? URL else { return }
@@ -204,6 +224,9 @@ struct ContentView: View {
         ScrollView {
             VStack(spacing: 12) {
                 IPACard(onChoose: { showIPAFileImporter = true })
+                if !model.queue.isEmpty {
+                    QueueCard()
+                }
                 if let ipa = model.ipa {
                     SigningOptionsCard(ipa: ipa)
                 }
