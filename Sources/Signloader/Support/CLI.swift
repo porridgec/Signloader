@@ -339,7 +339,8 @@ enum CLI {
             return
         }
         for device in devices {
-            print("\(device.displayName)  \(device.productType) iOS \(device.productVersion)  [\(device.transport.label)]\(device.reachable ? "" : " (不可达)"))".replacingOccurrences(of: "))", with: ")"))
+            let reachability = device.reachable ? "" : " (不可达)"
+            print("\(device.displayName)  \(device.productType) iOS \(device.productVersion)  [\(device.transport.label)]\(reachability)")
             print("    \(device.udid)")
         }
     }
