@@ -7,21 +7,31 @@ struct ContentView: View {
     @State private var isDropTargeted = false
     @State private var showIPAFileImporter = false
     @State private var showBatchImporter = false
+    @State private var showDirectInstallImporter = false
 
     var body: some View {
-        VStack(spacing: 0) {
-            header
-            Divider()
-            HSplitView {
-                leftColumn
-                    .frame(minWidth: 380, idealWidth: 430, maxWidth: 560)
-                rightColumn
-                    .frame(minWidth: 420)
-            }
-            Divider()
-            actionBar
-        }
-        .background(Color(nsColor: .windowBackgroundColor))
+        presentations(
+            dragAndDrop(
+                VStack(spacing: 0) {
+                    header
+                    Divider()
+                    HSplitView {
+                        leftColumn
+                            .frame(minWidth: 380, idealWidth: 430, maxWidth: 560)
+                        rightColumn
+                            .frame(minWidth: 420)
+                    }
+                    Divider()
+                    actionBar
+                }
+                .background(Color(nsColor: .windowBackgroundColor))
+            )
+        )
+    }
+
+    /// 拖放目标 + 拖放高亮
+    private func dragAndDrop(_ view: some View) -> some View {
+        view
         .dropDestination(for: URL.self) { urls, _ in
             let ipas = urls.filter { $0.pathExtension.lowercased() == "ipa" }
             guard !ipas.isEmpty else { return false }
@@ -42,6 +52,11 @@ struct ContentView: View {
                     .allowsHitTesting(false)
             }
         }
+    }
+
+    /// 弹层：sheet、文件导入、通知、错误提示
+    private func presentations(_ view: some View) -> some View {
+        view
         .sheet(isPresented: $showSettings) { SettingsView().environment(model) }
         .sheet(item: Binding(
             get: { model.detailProfile },
@@ -64,6 +79,18 @@ struct ContentView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .signloaderBatchPickIPA)) { _ in
             showBatchImporter = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .signloaderDirectInstall)) { _ in
+            showDirectInstallImporter = true
+        }
+        .fileImporter(
+            isPresented: $showDirectInstallImporter,
+            allowedContentTypes: [UTType(filenameExtension: "ipa") ?? .data],
+            allowsMultipleSelection: true
+        ) { result in
+            if case .success(let urls) = result {
+                Task { await model.installDirectly(urls: urls) }
+            }
         }
         .fileImporter(
             isPresented: $showBatchImporter,
@@ -281,6 +308,15 @@ struct ContentView: View {
                 .controlSize(.large)
                 .help(output.path)
             }
+
+            Button {
+                showDirectInstallImporter = true
+            } label: {
+                Label("直接安装…", systemImage: "arrow.down.square")
+            }
+            .controlSize(.large)
+            .disabled(model.isBusy || model.selectedDevice == nil)
+            .help("选择已签名的 IPA 直接装到设备，不重新签名（可多选）")
 
             Button {
                 Task { await model.install() }

@@ -57,13 +57,14 @@ Signloader 面向一个目录结构，默认 `~/.signloader/kit`（可在设置�
 3. **签名**（`S`）。默认直接 `zsign`；超过 500 MB 自动建议「大 App 安全模式」。
 4. **批量队列**。一次拖入多个 IPA（或 `⌘⇧U` 多选）即入队；每项独立走「解析 → 自动匹配 profile → 签名 →（选了设备则）安装」，单项失败不影响后续。未选设备时为仅签名模式。点队列行可在详情区查看该 IPA；「停止」在当前项结束后停下。
 5. **安装**（`I`）。USB 直连或 Wi-Fi 都可以，标题栏选设备（两者同时在线时优先 USB——大 IPA 走 Wi-Fi 明显慢）。Wi-Fi 设备需先用 USB 配对过一次才会被发现。
+6. **直接安装**（`⌘⇧I`）。把**已签名**的 IPA 不经重签直接装到当前设备，可多选顺序装；未签名的会被装前校验（`_CodeSignature` / 内嵌 profile）拦下并跳过。
 
    设备指示器是按**真实连接状态**着色的：绿 = 最近一次扫描时设备有应答，灰 = 发现了但不可达（设备休眠/不在同一网段，Wi-Fi 下常见）。形状区分传输方式（Wi-Fi 波形 / USB 线缆）。刷新按钮会重新探测。
 5. 右侧日志实时输出 `zsign` / `ideviceinstaller` 的完整输出；签完给出校验：有没有 `_CodeSignature`、有没有内嵌 profile、内嵌的 `application-identifier` 是否与所选 profile 一致（这决定能不能覆盖安装）。
 
 ### 快捷键
 
-`⌘O` 选 IPA · `⌘⇧O` 从主目录选 · `⌘⇧U` 批量选 IPA 入队 · `⌘R` 重扫工具包 · `⌘D` 刷新设备 · `S` 签名 · `I` 安装 · `⌘,` 设置
+`⌘O` 选 IPA · `⌘⇧O` 从主目录选 · `⌘⇧U` 批量选 IPA 入队 · `⌘⇧I` 直接安装已签名 IPA · `⌘R` 重扫工具包 · `⌘D` 刷新设备 · `S` 签名 · `I` 安装 · `⌘,` 设置
 
 ## CLI
 
@@ -112,6 +113,8 @@ signloader info <ipa> --json            # 解析 IPA
 signloader sign <ipa> --json -o out.ipa # 签名（stdout 纯 JSON，进度在 stderr）
 signloader sign <a.ipa> <b.ipa> … --json # 批量队列：逐个签名（+安装），单项失败不中断；
                                         # stdout 为单个 JSON 数组，退出码 0=全成 1=有失败
+signloader install <signed.ipa> --json  # 直接安装（不重签），装前校验签名/profile；
+                                        # 可多选，-i <udid|auto> 指定设备
 signloader verify <ipa> --json -m <app-id>
 ```
 

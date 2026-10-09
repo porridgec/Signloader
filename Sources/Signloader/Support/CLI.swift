@@ -73,6 +73,8 @@ enum CLI {
       Signloader sign <app.ipa>           签名，必要时安装
       Signloader sign <a.ipa> <b.ipa> …   批量：逐个签名（+安装），单项失败不中断；
                                           --json 时 stdout 为单个 JSON 数组
+      Signloader install <signed.ipa> …   直接安装（不重签）；可多选顺序装，
+                                          未签名的 IPA 会被装前校验拦下
       Signloader verify <signed.ipa>      校验产物里的签名与 profile
       Signloader doctor                   自检：工具链 / 工具包 / 设备
       Signloader version                  打印版本
@@ -126,6 +128,7 @@ enum CLI {
             case "devices":  try await printDevices(json: options.json)
             case "info":     try await printInfo(options, operand: operands(of: options).first, json: options.json)
             case "sign":     return try await sign(options, files: operands(of: options), kit: kit)
+            case "install":  return try await installFiles(options, files: operands(of: options))
             case "verify":   return try await verify(options, operand: operands(of: options).first)
             case "doctor":   return await doctor(json: options.json)
             default:
@@ -154,6 +157,113 @@ enum CLI {
     /// (`-o <path>`) for operands.
     private static func operands(of options: Options) -> [String] {
         Array(options.positional.dropFirst())
+    }
+
+    // MARK: - install (direct)
+
+    /// `install <signed.ipa> [...]` — 装已签名的 IPA，不重签。
+    /// 单个文件 = 单 JSON 对象；多个 = 数组（与 sign 的批量约定一致）。
+    private static func installFiles(_ options: Options, files: [String]) async throws -> Int {
+        guard !files.isEmpty else { throw CLIError.usage("需要一个 .ipa 路径") }
+
+        let say: (String) -> Void = { message in
+            if options.json {
+                FileHandle.standardError.write(Data("\(message)\n".utf8))
+            } else {
+                print(message)
+            }
+        }
+
+        let device = try await resolveTargetDevice(spec: options.install ?? "auto", say: say)
+
+        var results: [[String: Any]] = []
+        var failed = 0
+
+        for (index, file) in files.enumerated() {
+            let expanded = (file as NSString).expandingTildeInPath
+            let url = URL(fileURLWithPath: expanded)
+            if !options.json { print("\n[\(index + 1)/\(files.count)] \(url.lastPathComponent)") }
+
+            do {
+                let info = try await IPAParser.parse(url: url)
+                let check = await IPAParser.verify(signedIPA: url, expectedAppIdentifier: nil)
+                guard check.hasCodeSignature && check.hasEmbeddedProfile else {
+                    throw InstallError.unsigned(url.lastPathComponent)
+                }
+
+                if options.uninstallFirst {
+                    try await DeviceService.shared.uninstall(
+                        udid: device.udid, transport: device.transport, bundleID: info.bundleID
+                    ) { lines in for line in lines { say(line) } }
+                }
+
+                say("安装 \(info.displayName) → \(device.displayName)（\(device.transport.label)）")
+                try await DeviceService.shared.install(
+                    udid: device.udid, transport: device.transport, ipa: url
+                ) { lines in for line in lines { say(line) } }
+
+                let payload: [String: Any] = [
+                    "command": "install", "ok": true,
+                    "file": expanded,
+                    "appName": info.appName,
+                    "bundleID": info.bundleID,
+                    "device": [
+                        "udid": device.udid, "name": device.displayName,
+                        "transport": device.transport.rawValue,
+                    ] as [String: Any],
+                ]
+                results.append(payload)
+                if !options.json { say("安装成功 \(info.displayName)") }
+            } catch {
+                failed += 1
+                let note = error.localizedDescription.components(separatedBy: "\n").first ?? ""
+                results.append(["command": "install", "ok": false,
+                                "file": expanded, "error": note])
+                if !options.json {
+                    FileHandle.standardError.write(Data("失败     \(note)\n".utf8))
+                }
+            }
+        }
+
+        if options.json {
+            // 单文件=对象，多文件=数组，与 sign 的约定一致
+            if files.count == 1, let only = results.first {
+                print(jsonString(only))
+            } else {
+                print(jsonString(["command": "install", "ok": failed == 0, "items": results]))
+            }
+        } else {
+            print("\n安装结束：成功 \(files.count - failed) · 失败 \(failed)")
+        }
+        return failed == 0 ? 0 : 1
+    }
+
+    /// `-i <udid|auto>` → Device（auto 优先 USB，与 sign 的安装语义一致）。
+    private static func resolveTargetDevice(spec: String, say: @escaping (String) -> Void) async throws -> Device {
+        let known = (try? await DeviceService.shared.listDevices()) ?? []
+        if spec == "auto" {
+            guard let first = known.first else {
+                throw CLIError.usage("没有已连接的设备")
+            }
+            say("设备     \(first.displayName) (\(first.udid)) · \(first.transport.label)")
+            return first
+        }
+        if let match = known.first(where: { $0.udid == spec }) {
+            say("设备     \(match.displayName) (\(match.udid)) · \(match.transport.label)")
+            return match
+        }
+        return Device(udid: spec, name: "", productName: "", productType: "",
+                      productVersion: "", transport: .usb, reachable: true)
+    }
+
+    enum InstallError: LocalizedError {
+        case unsigned(String)
+
+        var errorDescription: String? {
+            switch self {
+            case .unsigned(let name): return "\(name) 没有代码签名/内嵌 profile，先签名再安装（已跳过）"
+            }
+        }
     }
 
     // MARK: - doctor

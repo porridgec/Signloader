@@ -63,6 +63,10 @@ struct SignloaderApp: App {
                     NotificationCenter.default.post(name: .signloaderBatchPickIPA, object: nil)
                 }
                     .keyboardShortcut("u", modifiers: [.command, .shift])
+                Button("直接安装 IPA…") {
+                    NotificationCenter.default.post(name: .signloaderDirectInstall, object: nil)
+                }
+                    .keyboardShortcut("i", modifiers: [.command, .shift])
                 Button("重新扫描签名工具包") { Task { await model.loadKit() } }
                     .keyboardShortcut("r")
                 Button("刷新设备") { Task { await model.loadDevices() } }
@@ -91,6 +95,7 @@ extension Notification.Name {
     static let signloaderPickIPA = Notification.Name("Signloader.pickIPA")
     static let signloaderLoadIPA = Notification.Name("Signloader.loadIPA")
     static let signloaderBatchPickIPA = Notification.Name("Signloader.batchPickIPA")
+    static let signloaderDirectInstall = Notification.Name("Signloader.directInstall")
 }
 
 /// `⌘⇧O` opens the panel in the user's home directory as a convenient default.

@@ -461,6 +461,57 @@ final class AppModel {
         }
     }
 
+    /// 直接安装：把**已签名**的 IPA 不经重签装到当前设备。多个文件顺序装，
+    /// 单个失败不中断。装前校验 _CodeSignature / 内嵌 profile——没签过的
+    /// IPA 装到设备必然失败，提前拦下并给出明确原因。
+    func installDirectly(urls: [URL]) async {
+        let files = urls.filter { $0.pathExtension.lowercased() == "ipa" }
+        guard !files.isEmpty else { return }
+        guard let device = selectedDevice else {
+            log("未选择设备，无法直接安装（顶部选择设备）", .warning)
+            return
+        }
+        guard !isBusy else { return }
+        busy = .installing
+        defer { busy = .idle }
+
+        log("直接安装 \(files.count) 个 IPA → \(device.displayName)（\(device.transport.label)）", .info)
+
+        var installed = 0
+        for file in files {
+            do {
+                let info = try await IPAParser.parse(url: file)
+                let check = await IPAParser.verify(signedIPA: file, expectedAppIdentifier: nil)
+                guard check.hasCodeSignature && check.hasEmbeddedProfile else {
+                    log("「\(info.displayName)」没有代码签名/内嵌 profile，先签名再安装（已跳过）", .error)
+                    continue
+                }
+
+                if options.uninstallBeforeInstall {
+                    try await DeviceService.shared.uninstall(
+                        udid: device.udid, transport: device.transport, bundleID: info.bundleID
+                    ) { lines in
+                        Task { @MainActor in lines.forEach { self.log($0) } }
+                    }
+                }
+
+                log("「\(info.displayName)」安装中…", .info)
+                try await DeviceService.shared.install(
+                    udid: device.udid, transport: device.transport, ipa: file
+                ) { lines in
+                    Task { @MainActor in lines.forEach { self.log($0) } }
+                }
+                installed += 1
+                log("「\(info.displayName)」安装成功", .success)
+            } catch {
+                log("「\(file.lastPathComponent)」安装失败：\(error.localizedDescription)", .error)
+            }
+        }
+
+        log("直接安装结束：成功 \(installed) / \(files.count)", installed == files.count ? .success : .warning)
+        await loadInstalledApps()
+    }
+
     func install() async {
         guard let outputURL, let device = selectedDevice else { return }
         guard FileManager.default.fileExists(atPath: outputURL.path) else {
